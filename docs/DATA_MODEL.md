@@ -12,7 +12,7 @@
 | `dispatch` | `Dispatch` `DispatchMember` `LeaderTransfer` | 派工、组员顺序、小组长移交 |
 | `reporting` | `WorkSession` `PauseInterval` `GroupMemberSpan` `PieceReport` `ReportCorrection` `ReportRejection` | 开工、暂停、报工和审核留痕 |
 | `timekeeping` | `AuxiliaryWorkCategory` `AuxiliaryWorkLog` `AuxiliaryWorkCorrection` `AuxiliaryWorkRejection` | 辅助工时。归属日、审核、锁账与报工同一套 |
-| `erp` | `WorkOrder` `ProductionReceipt` `ErpSourceMapping` `SyncLog` `SyncState` | 易飞工单和入库只读镜像，字段映射，同步日志 |
+| `erp` | `WorkOrder` `ProductionReceipt` `ErpSourceMapping` `SyncLog` `SyncState` `SyncLock` | 易飞工单和入库只读镜像，字段映射，同步日志，防止重叠的锁 |
 | `settlement` | `SettlementPeriod` `SettlementLockEvent` `AuxiliaryHourSummary` | 月结期间、锁账留痕、按员工汇总的已审核辅助工时 |
 
 ```mermaid
@@ -81,7 +81,7 @@ erDiagram
 
 ## 入库与逐工序报工
 
-`ProductionReceipt` 是易飞入库行的只读镜像。`ErpSourceMapping` 记下表名和字段怎么对到本地，默认 `verified=False`，说明里标着待核对。同步任务以后按这张表拉取，本期内不写拉取逻辑。
+`ProductionReceipt` 是易飞入库行的只读镜像。`ErpSourceMapping` 记下表名和字段怎么对到本地，默认 `verified=False`，说明里标着待核对。同步按这张映射拉取；环境变量可以覆盖。映射没填的列仍用文档里的默认示例，那些默认值待核对。
 
 对照由 `work_order_quantity_comparison` 现算，不另存一张结果表。
 
@@ -115,15 +115,15 @@ erDiagram
 | `PieceworkSettlement` | `SettlementPeriod` | 按年、月锁账，不是一张结算草稿 |
 | `PieceworkSettlementRevision` `PieceworkSettlementDetail` | 未另建 | 计件金额分配还没做。辅助工时先用 `AuxiliaryHourSummary` 记下分钟 |
 | `ProductionReceipt` | 同名模型 | 纳入一期，只读。逐工序对照入库数和报工数 |
-| `SyncLog` `SyncState` | 同名模型 | 给后续同步任务用。拉取逻辑不在本期 |
+| `SyncLog` `SyncState` | 同名模型 | 每次拉取写入日志，并记下最近一次成功时间 |
 | `Terminal` `TerminalSession` `TerminalAction` | 未纳入 | 终端页面和会话协议还没做。认人字段在员工上 |
 
 ## 仍待核对或以后再做
 
 - 易飞入库表名、字段名还没对照 9.012。`ErpSourceMapping` 默认未核对。
-- 计件工资、整组按工时占比分配和尾差、扣款补贴、Excel 导出、终端页面、易飞拉取任务、并行工时分摊、派工超时提醒，仍不在本期计算或页面里。
+- 计件工资、整组按工时占比分配和尾差、扣款补贴、Excel 导出、终端页面、并行工时分摊、派工超时提醒，仍不在本期计算或页面里。易飞拉取已经接上，表名和字段仍待核对。
 - 辅助工时的单价和金额只是空字段，一期不启用。
 
 ## 本期故意不做
 
-终端页面、登录和权限、易飞同步拉取、并行工时分摊、完工超出派工时的审核提醒、计件月结工资（含整组分配与尾差）、扣款补贴、Excel 导出、派工超时提醒。这些在对应模块的 TODO 里。
+终端页面、登录和权限、并行工时分摊、完工超出派工时的审核提醒、计件月结工资（含整组分配与尾差）、扣款补贴、Excel 导出、派工超时提醒。这些在对应模块的 TODO 里。易飞未结工单和生产入库的只读拉取已经接上。
