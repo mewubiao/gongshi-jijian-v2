@@ -297,7 +297,7 @@ class PauseInterval(models.Model):
     work_session = models.ForeignKey(
         WorkSession,
         verbose_name="开工",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="pauses",
     )
     reason = models.TextField("暂停原因")
@@ -385,7 +385,7 @@ class GroupMemberSpan(models.Model):
     work_session = models.ForeignKey(
         WorkSession,
         verbose_name="开工",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="member_spans",
     )
     employee = models.ForeignKey(

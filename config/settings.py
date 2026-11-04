@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "erp",
     "dispatch",
     "reporting",
+    "timekeeping",
     "settlement",
 ]
 

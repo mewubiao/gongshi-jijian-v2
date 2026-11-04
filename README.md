@@ -53,10 +53,11 @@ uv run ruff format --check .
 
 - `config/`：配置、路由，以及 `/health/`。
 - `masterdata/`：员工、班组、工作中心、产品与工序。
-- `erp/`：易飞工单只读镜像。
+- `erp/`：易飞工单和入库只读镜像、字段映射、同步日志。
 - `dispatch/`：派工、整组组员与小组长移交。
 - `reporting/`：开工、暂停、报工、审核留痕、整组加入和离开。
-- `settlement/`：月结期间、锁账与解锁留痕。
+- `timekeeping/`：辅助工时。
+- `settlement/`：月结期间、锁账留痕、辅助工时汇总。
 
 ## 后续再做
 

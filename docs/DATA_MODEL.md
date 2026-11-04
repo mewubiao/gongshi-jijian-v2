@@ -9,10 +9,11 @@
 | 应用 | 模型 | 职责 |
 | --- | --- | --- |
 | `masterdata` | `Employee` `WorkCenter` `Team` `Product` `Process` `ProcessRateHistory` | 员工、班次、产品工序 |
-| `erp` | `WorkOrder` | 易飞工单只读镜像 |
 | `dispatch` | `Dispatch` `DispatchMember` `LeaderTransfer` | 派工、组员顺序、小组长移交 |
 | `reporting` | `WorkSession` `PauseInterval` `GroupMemberSpan` `PieceReport` `ReportCorrection` `ReportRejection` | 开工、暂停、报工和审核留痕 |
-| `settlement` | `SettlementPeriod` `SettlementLockEvent` | 月结期间、锁账和解锁留痕 |
+| `timekeeping` | `AuxiliaryWorkCategory` `AuxiliaryWorkLog` `AuxiliaryWorkCorrection` `AuxiliaryWorkRejection` | 辅助工时。归属日、审核、锁账与报工同一套 |
+| `erp` | `WorkOrder` `ProductionReceipt` `ErpSourceMapping` `SyncLog` `SyncState` | 易飞工单和入库只读镜像，字段映射，同步日志 |
+| `settlement` | `SettlementPeriod` `SettlementLockEvent` `AuxiliaryHourSummary` | 月结期间、锁账留痕、按员工汇总的已审核辅助工时 |
 
 ```mermaid
 erDiagram
@@ -38,6 +39,9 @@ erDiagram
     PieceReport ||--o{ ReportRejection : 驳回
     PieceReport ||--o| PieceReport : 驳回后重报
     SettlementPeriod ||--o{ SettlementLockEvent : 留痕
+    SettlementPeriod ||--o{ AuxiliaryHourSummary : 辅助工时
+    Employee ||--o{ AuxiliaryWorkLog : 辅助工时
+    WorkOrder ||--o{ ProductionReceipt : 入库
 ```
 
 ## 已经卡住的规则
@@ -57,7 +61,9 @@ erDiagram
 - 驳回后由原报工人改数量重报，沿用首次冻结的单价和标准工时，旧报工和驳回记录都留着。
 - 完工数量可以大于派工数量，模型不拦截。
 - 同一派工同时只能有一条待审核或已通过的报工。
-- 该归属月已锁账时，报工和它的修正、驳回、开工记录不能再改。有待审核报工时不能锁账。已撤回、已驳回不挡住锁账。锁账和解锁都由系统管理员执行。解锁必须留下操作人、时间和原因。
+- 该归属月已锁账时，报工、辅助工时和它们的修正、驳回不能再改。有待审核报工或待审核辅助工时时不能锁账。已撤回、已驳回不挡住锁账，也不计入辅助工时汇总。锁账和解锁都由系统管理员执行。解锁必须留下操作人、时间和原因。
+- 锁账时按员工写入 `AuxiliaryHourSummary`：该归属月已审核通过的辅助工时分钟合计。有修正时用修正后的分钟。`unit_price` 和 `amount` 保持空，不参与计算。解锁后清掉这份汇总，再次锁账按当时的已审核记录重写。
+- 入库对照看产品上的每一道工序，不只末道工序。工单入库数是有效入库行 `receipt_qty` 之和。每道工序分别给出审核通过数量和全部未撤回报工数量（有修正时用修正后的完工数量）。没有报工的工序也列出，数量为 0。差异 = 报工数量 − 入库数量。
 
 ## 文档没写死、模型里暂定的存法
 
@@ -67,6 +73,57 @@ erDiagram
 - 反审核只要求该月还没锁账。更高权限文档没指定到某个角色，模型不另造一个。
 - 一条派工同时只保留一条有效报工。部分完工分多次报，文档没有约定。
 
+## 辅助工时月结
+
+已审核通过的辅助工时计入月结，按员工和归属月份汇总分钟。第一期不算金额。记录上的单价、金额，以及汇总行上的单价、金额，都是以后扩展用的空字段，锁账和汇总都不读取它们。
+
+归属日和班次名称在开工时按工作中心（或班组覆盖）的白班 / 夜班写下，算法与计件报工相同。
+
+## 入库与逐工序报工
+
+`ProductionReceipt` 是易飞入库行的只读镜像。`ErpSourceMapping` 记下表名和字段怎么对到本地，默认 `verified=False`，说明里标着待核对。同步任务以后按这张表拉取，本期内不写拉取逻辑。
+
+对照由 `work_order_quantity_comparison` 现算，不另存一张结果表。
+
+## 与旧系统对照
+
+旧系统 33 个模型。和 `DESIGN.md` 冲突的不搬过来。
+
+| 旧模型 | v2 | 理由 |
+| --- | --- | --- |
+| `Employee` | `Employee` | 补了 `code`。工牌拆成 `badge_nfc` 和 `qr_code`。`active` 沿用旧名。班组可空，因为工艺、财务、管理员不一定在班组里 |
+| `EmployeeCodeCounter` | 未纳入 | 员工编码手工维护，不另做发号器 |
+| `EmployeeCreationRequest` | 未纳入 | 不在一期 |
+| `WorkCenter` | `WorkCenter` | 补了 `active`。白班 / 夜班起止是设计要求，旧系统没有这两对钟点 |
+| `Team` | `Team` | 补了 `code`、`active`。班组长用员工外键。班次覆盖留在班组上 |
+| `TeamShift` `BreakPeriod` | 未采纳 | 设计规定白班 / 夜班配在工作中心，班组只能整段覆盖。一期不扣固定休息 |
+| `SystemParameter` | 未纳入 | 旧默认值（允许超派、60 分钟同步、60 秒空闲）和设计冲突 |
+| `OperationCategory` `Workstation` | 未纳入 | 一期派工不落到工位，并行规则也不按工序类别限数 |
+| `Item` | `Product` | 产品在本系统维护。补了规格、单位、启用。一期不同步品号 |
+| `ItemOperation` | `Process` | 补了 `operation_code`。单价和标准工时仍在工序上，改完立即生效 |
+| `OperationStandardVersion` | 未采纳 | 设计要的是修改人、时间、旧值、新值，不是按生效日做版本。对应 `ProcessRateHistory` |
+| `WorkOrder` | `WorkOrder` | 原有字段不改名。只增加 `erp_key`、单别、计划数量、单位、易飞状态和计划日期。`order_no` 仍是工单号，`synced_at` 仍是最近同步时间 |
+| `WorkOrderOperationSnapshot` | 未采纳 | 单价在报工时冻结，不在工单下达时冻结。一期没有下达动作 |
+| `WorkOrderErpChangeLog` | 未纳入 | 一期镜像由同步覆盖，没有人工确认 ERP 变更这一步 |
+| `WorkAssignment` | `Dispatch` | 单人 / 整组用 `kind`。补了班组、计划日期、备注。超派仍然硬拦截 |
+| `WorkAssignmentMember` | `DispatchMember` | 用顺序而不是「负责人」标记。第一位是初始小组长，移交另记 `LeaderTransfer` |
+| `TimeSegment` | 未采纳 | 开工、暂停、在组时段已经表达设计里的计时。不自动停表，也不做系统暂停 |
+| `WorkReport` | `PieceReport` | 完工数量只有一个口径。修正和驳回另表保存，不覆盖原值 |
+| `WorkReportTimeSegment` | 未采纳 | 不把报工和工时段做成一一对应 |
+| `WorkReportAllocation` | 未采纳 | 整组金额分配仍是结算计算，本期不做。组员工时在 `GroupMemberSpan` |
+| `AuxiliaryWorkCategory` `AuxiliaryWorkLog` | 同名模型 | 纳入一期。归属日和锁账与报工一致。已审核分钟按员工写入 `AuxiliaryHourSummary` |
+| `PieceworkSettlement` | `SettlementPeriod` | 按年、月锁账，不是一张结算草稿 |
+| `PieceworkSettlementRevision` `PieceworkSettlementDetail` | 未另建 | 计件金额分配还没做。辅助工时先用 `AuxiliaryHourSummary` 记下分钟 |
+| `ProductionReceipt` | 同名模型 | 纳入一期，只读。逐工序对照入库数和报工数 |
+| `SyncLog` `SyncState` | 同名模型 | 给后续同步任务用。拉取逻辑不在本期 |
+| `Terminal` `TerminalSession` `TerminalAction` | 未纳入 | 终端页面和会话协议还没做。认人字段在员工上 |
+
+## 仍待核对或以后再做
+
+- 易飞入库表名、字段名还没对照 9.012。`ErpSourceMapping` 默认未核对。
+- 计件工资、整组按工时占比分配和尾差、扣款补贴、Excel 导出、终端页面、易飞拉取任务、并行工时分摊、派工超时提醒，仍不在本期计算或页面里。
+- 辅助工时的单价和金额只是空字段，一期不启用。
+
 ## 本期故意不做
 
-终端页面、登录和权限、易飞同步任务、并行工时分摊、完工超出派工时的审核提醒、月结工资（含整组按工时占比分配和尾差）、扣款补贴、Excel 导出、派工超时提醒。这些在对应模块的 TODO 里。
+终端页面、登录和权限、易飞同步拉取、并行工时分摊、完工超出派工时的审核提醒、计件月结工资（含整组分配与尾差）、扣款补贴、Excel 导出、派工超时提醒。这些在对应模块的 TODO 里。

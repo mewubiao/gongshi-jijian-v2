@@ -23,6 +23,7 @@ class Employee(models.Model):
         PROCESS_ENGINEER = "process_engineer", "工艺人员"
         ADMIN = "admin", "系统管理员"
 
+    code = models.CharField("员工编码", max_length=32, unique=True)
     name = models.CharField("姓名", max_length=64)
     badge_nfc = models.CharField(
         "工牌 NFC 号",
@@ -39,7 +40,7 @@ class Employee(models.Model):
         null=True,
         blank=True,
         on_delete=models.PROTECT,
-        related_name="members",
+        related_name="employees",
     )
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -50,7 +51,7 @@ class Employee(models.Model):
         related_name="employee",
         help_text="可选。以后登录对应到员工；本期终端不使用它认人。",
     )
-    is_active = models.BooleanField("在职", default=True)
+    active = models.BooleanField("启用", default=True, db_index=True)
 
     class Meta:
         verbose_name = "员工"
@@ -103,8 +104,9 @@ class Employee(models.Model):
 class WorkCenter(models.Model):
     """工作中心。白班 / 夜班起止是班次的默认配置。"""
 
-    code = models.CharField("编码", max_length=64, unique=True)
-    name = models.CharField("名称", max_length=64)
+    code = models.CharField("工作中心编码", max_length=32, unique=True)
+    name = models.CharField("工作中心名称", max_length=100)
+    active = models.BooleanField("启用", default=True, db_index=True)
     day_shift_start = models.TimeField("白班开始")
     day_shift_end = models.TimeField("白班结束")
     night_shift_start = models.TimeField("夜班开始")
@@ -133,7 +135,8 @@ class WorkCenter(models.Model):
 class Team(models.Model):
     """班组。班次默认继承工作中心，四个钟点都填写时改为整段覆盖。"""
 
-    name = models.CharField("名称", max_length=64)
+    code = models.CharField("班组编码", max_length=32, unique=True)
+    name = models.CharField("班组名称", max_length=100)
     work_center = models.ForeignKey(
         WorkCenter,
         verbose_name="工作中心",
@@ -146,6 +149,7 @@ class Team(models.Model):
         on_delete=models.PROTECT,
         related_name="led_teams",
     )
+    active = models.BooleanField("启用", default=True, db_index=True)
     day_shift_start = models.TimeField("白班开始", null=True, blank=True)
     day_shift_end = models.TimeField("白班结束", null=True, blank=True)
     night_shift_start = models.TimeField("夜班开始", null=True, blank=True)
@@ -179,7 +183,7 @@ class Team(models.Model):
     def clean(self):
         if self.leader_id and self.leader.role != Employee.Role.TEAM_LEADER:
             raise ValidationError({"leader": "班组长必须是班组长角色"})
-        if self.leader_id and not self.leader.is_active:
+        if self.leader_id and not self.leader.active:
             raise ValidationError({"leader": "班组长必须在职"})
         times = (
             self.day_shift_start,
@@ -201,7 +205,10 @@ class Team(models.Model):
 
 class Product(models.Model):
     code = models.CharField("产品编码", max_length=64, unique=True)
-    name = models.CharField("名称", max_length=128)
+    name = models.CharField("品名", max_length=200)
+    specification = models.CharField("规格", max_length=300, blank=True, default="")
+    unit = models.CharField("单位", max_length=40, blank=True, default="")
+    active = models.BooleanField("启用", default=True, db_index=True)
 
     class Meta:
         verbose_name = "产品"
@@ -220,8 +227,10 @@ class Process(models.Model):
         on_delete=models.PROTECT,
         related_name="processes",
     )
-    sequence = models.PositiveIntegerField("路线顺序")
-    name = models.CharField("工序名称", max_length=128)
+    operation_code = models.CharField("工序编码", max_length=50)
+    sequence = models.PositiveIntegerField("顺序号")
+    name = models.CharField("工序名称", max_length=100)
+    active = models.BooleanField("启用", default=True, db_index=True)
     unit_price = models.DecimalField("单价", max_digits=12, decimal_places=2)
     standard_minutes = models.DecimalField(
         "标准工时（分钟）",
@@ -234,6 +243,10 @@ class Process(models.Model):
         verbose_name_plural = "工序"
         ordering = ["product_id", "sequence"]
         constraints = [
+            models.UniqueConstraint(
+                fields=["product", "operation_code"],
+                name="process_operation_code_unique",
+            ),
             models.UniqueConstraint(
                 fields=["product", "sequence"],
                 name="process_sequence_unique",
@@ -256,6 +269,9 @@ class Process(models.Model):
         return f"{self.product.code}-{self.sequence} {self.name}"
 
     def clean(self):
+        self.operation_code = (self.operation_code or "").strip()
+        if not self.operation_code:
+            raise ValidationError({"operation_code": "工序编码不能为空"})
         ensure_two_places(self.unit_price, "unit_price", "单价")
         ensure_two_places(self.standard_minutes, "standard_minutes", "标准工时")
         if self.unit_price is not None and self.unit_price < 0:

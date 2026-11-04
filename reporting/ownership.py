@@ -37,3 +37,14 @@ def ownership_date(started_at, day_start, day_end, night_start, night_end):
     if in_shift(clock, day_start, day_end):
         return local.date()
     return local.date()
+
+
+def classify_shift(started_at, day_start, day_end, night_start, night_end):
+    """返回归属日，以及白班 / 夜班名称。空隙没有班次名。"""
+    owned = ownership_date(started_at, day_start, day_end, night_start, night_end)
+    clock = started_at.astimezone(SHANGHAI).time()
+    if in_shift(clock, night_start, night_end):
+        return owned, "夜班"
+    if in_shift(clock, day_start, day_end):
+        return owned, "白班"
+    return owned, ""
