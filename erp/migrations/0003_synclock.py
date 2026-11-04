@@ -16,7 +16,7 @@ def unseed_sync_lock(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("erp", "0001_initial"),
+        ("erp", "0002_erpsourcemapping_syncstate_workorder_erp_due_date_and_more"),
     ]
 
     operations = [
