@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}首页 · 工时计件{% endblock %}
+{% block nav_title %}首页{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-6">
+  <div>
+    <h1 class="text-3xl font-bold">工时计件</h1>
+    <p class="mt-2 text-base-content/70">车间报工、班组审核和月结会接到这套页面上。当前先固定布局和组件。</p>
+  </div>
+  <div class="flex flex-wrap gap-4">
+    <section class="card w-80 border border-base-300 bg-base-100">
+      <div class="card-body">
+        <h2 class="card-title">车间终端</h2>
+        <p>工人刷卡、开工和完工使用大字号、大按钮，没有侧边栏。</p>
+        {% url 'terminal' as terminal_url %}
+        {% include "components/button.html" with label="进入终端" href=terminal_url variant="primary" only %}
+      </div>
+    </section>
+    <section class="card w-80 border border-base-300 bg-base-100">
+      <div class="card-body">
+        <h2 class="card-title">后台管理</h2>
+        <p>员工、工序和结算数据在后台维护。界面为中文。</p>
+        {% url 'admin:index' as admin_url %}
+        {% include "components/button.html" with label="打开后台" href=admin_url variant="neutral" only %}
+      </div>
+    </section>
+    {% if show_ui_gallery %}
+      <section class="card w-80 border border-base-300 bg-base-100">
+        <div class="card-body">
+          <h2 class="card-title">组件示例</h2>
+          <p>按钮、表格、弹窗、表单和提示消息的统一写法。</p>
+          {% url 'ui-gallery' as gallery_url %}
+          {% include "components/button.html" with label="查看组件" href=gallery_url variant="secondary" only %}
+        </div>
+      </section>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

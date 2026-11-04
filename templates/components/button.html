@@ -1,0 +1,30 @@
+{% if href and not disabled %}
+<a
+  href="{{ href }}"
+  class="btn w-fit {% if variant == 'secondary' %}btn-secondary{% elif variant == 'accent' %}btn-accent{% elif variant == 'neutral' %}btn-neutral{% elif variant == 'info' %}btn-info{% elif variant == 'success' %}btn-success{% elif variant == 'warning' %}btn-warning{% elif variant == 'error' %}btn-error{% elif variant == 'ghost' %}btn-ghost{% else %}btn-primary{% endif %} {% if size == 'xs' %}btn-xs{% elif size == 'sm' %}btn-sm{% elif size == 'lg' %}btn-lg{% elif size == 'xl' %}btn-xl{% endif %} {{ extra_class }}"
+  {% if modal %}onclick="document.getElementById('{{ modal }}').showModal()"{% endif %}
+  {% if hx_get %}hx-get="{{ hx_get }}"{% endif %}
+  {% if hx_post %}hx-post="{{ hx_post }}"{% endif %}
+  {% if hx_target %}
+    hx-target="{{ hx_target }}"
+  {% elif modal %}
+    {% if hx_get or hx_post %}hx-target="#{{ modal }}-body"{% endif %}
+  {% endif %}
+  {% if hx_get or hx_post %}hx-swap="{{ hx_swap|default:'innerHTML' }}"{% endif %}
+>{{ label }}</a>
+{% else %}
+<button
+  type="{{ type|default:'button' }}"
+  class="btn w-fit {% if variant == 'secondary' %}btn-secondary{% elif variant == 'accent' %}btn-accent{% elif variant == 'neutral' %}btn-neutral{% elif variant == 'info' %}btn-info{% elif variant == 'success' %}btn-success{% elif variant == 'warning' %}btn-warning{% elif variant == 'error' %}btn-error{% elif variant == 'ghost' %}btn-ghost{% else %}btn-primary{% endif %} {% if size == 'xs' %}btn-xs{% elif size == 'sm' %}btn-sm{% elif size == 'lg' %}btn-lg{% elif size == 'xl' %}btn-xl{% endif %} {{ extra_class }}"
+  {% if disabled %}disabled{% endif %}
+  {% if modal %}onclick="document.getElementById('{{ modal }}').showModal()"{% endif %}
+  {% if hx_get %}hx-get="{{ hx_get }}"{% endif %}
+  {% if hx_post %}hx-post="{{ hx_post }}"{% endif %}
+  {% if hx_target %}
+    hx-target="{{ hx_target }}"
+  {% elif modal %}
+    {% if hx_get or hx_post %}hx-target="#{{ modal }}-body"{% endif %}
+  {% endif %}
+  {% if hx_get or hx_post %}hx-swap="{{ hx_swap|default:'innerHTML' }}"{% endif %}
+>{{ label }}</button>
+{% endif %}

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}组件示例 · 工时计件{% endblock %}
+{% block nav_title %}组件示例{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-6">
+  <div>
+    <h1 class="text-3xl font-bold">组件示例</h1>
+    <p class="mt-2 text-base-content/70">业务页面只使用这些组件和 daisyUI 自带样式。</p>
+  </div>
+
+  <section class="card border border-base-300 bg-base-100">
+    <div class="card-body gap-4">
+      <h2 class="card-title">按钮</h2>
+      <div class="flex flex-wrap gap-2">
+        {% include "components/button.html" with label="保存" variant="primary" only %}
+        {% include "components/button.html" with label="取消" variant="ghost" only %}
+        {% include "components/button.html" with label="通过" variant="success" only %}
+        {% include "components/button.html" with label="修正" variant="warning" only %}
+        {% include "components/button.html" with label="驳回" variant="error" only %}
+        {% include "components/button.html" with label="次要操作" variant="neutral" extra_class="btn-outline" only %}
+        {% include "components/button.html" with label="已停用" variant="neutral" disabled=True only %}
+      </div>
+    </div>
+  </section>
+
+  <section class="card border border-base-300 bg-base-100">
+    <div class="card-body">
+      <h2 class="card-title">表格</h2>
+      {% include "components/table.html" with columns=columns rows=rows caption="报工示例" page=page only %}
+    </div>
+  </section>
+
+  <section class="card border border-base-300 bg-base-100">
+    <div class="card-body">
+      <h2 class="card-title">空状态</h2>
+      {% include "components/table.html" with columns=columns caption="暂无报工" empty_text="暂无数据" only %}
+    </div>
+  </section>
+
+  <section class="card border border-base-300 bg-base-100">
+    <div class="card-body gap-4">
+      <h2 class="card-title">弹窗</h2>
+      <p>打开后由 HTMX 从本机载入内容。</p>
+      {% url 'ui-modal' as modal_url %}
+      {% include "components/button.html" with label="打开弹窗" variant="primary" modal="demo-modal" hx_get=modal_url only %}
+      {% include "components/modal.html" with id="demo-modal" title="说明" body="正在加载…" only %}
+    </div>
+  </section>
+
+  <section class="card border border-base-300 bg-base-100">
+    <div class="card-body gap-6">
+      <h2 class="card-title">表单</h2>
+      <div>
+        <h3 class="mb-2 font-medium">错误展示</h3>
+        {% include "components/form.html" with form=sample_form show_submit=False %}
+      </div>
+      <div>
+        <h3 class="mb-2 font-medium">提交示例</h3>
+        {% include "components/form.html" with form=form submit_label="提交示例" autocomplete="off" %}
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

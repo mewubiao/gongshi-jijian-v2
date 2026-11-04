@@ -1,0 +1,61 @@
+{% extends "shell.html" %}
+
+{% block body %}
+<div class="flex min-h-screen bg-base-200">
+  <aside id="app-sidebar" class="flex w-64 shrink-0 flex-col border-r border-base-300 bg-base-100">
+    <div class="px-4 py-5 text-xl font-bold">
+      <a href="{% url 'home' %}">工时计件</a>
+    </div>
+    <ul class="menu w-full px-2">
+      <li>
+        <a
+          href="{% url 'home' %}"
+          {% if request.resolver_match and request.resolver_match.url_name == "home" %}
+            class="menu-active"
+            aria-current="page"
+          {% endif %}
+        >首页</a>
+      </li>
+      <li>
+        <a
+          href="{% url 'terminal' %}"
+          {% if request.resolver_match and request.resolver_match.url_name == "terminal" %}
+            class="menu-active"
+            aria-current="page"
+          {% endif %}
+        >车间终端</a>
+      </li>
+      {% if show_ui_gallery %}
+        <li>
+          <a
+            href="{% url 'ui-gallery' %}"
+            {% if request.resolver_match and request.resolver_match.url_name == "ui-gallery" %}
+              class="menu-active"
+              aria-current="page"
+            {% endif %}
+          >组件示例</a>
+        </li>
+      {% endif %}
+      <li>
+        <a href="{% url 'admin:index' %}">后台管理</a>
+      </li>
+    </ul>
+  </aside>
+  <div class="flex min-w-0 flex-1 flex-col">
+    <header id="app-topnav" class="navbar border-b border-base-300 bg-base-100 px-4">
+      <div class="flex-1 text-lg font-semibold">{% block nav_title %}工时计件{% endblock %}</div>
+      <div class="flex-none items-center gap-3">
+        <span class="text-sm text-base-content/70">
+          {% if user.is_authenticated %}{{ user.get_username }}{% else %}未登录{% endif %}
+        </span>
+        {% url 'admin:index' as admin_url %}
+        {% include "components/button.html" with label="后台" href=admin_url variant="ghost" only %}
+      </div>
+    </header>
+    <main id="app-content" class="flex-1 p-6">
+      {% include "components/messages.html" %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% endblock %}

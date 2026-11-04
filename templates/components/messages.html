@@ -1,0 +1,15 @@
+{% if messages %}
+  <div id="app-messages" class="mb-4 flex flex-col gap-2">
+    {% for message in messages %}
+      {% if message.level_tag == "error" %}
+        <div role="alert" class="alert alert-error"><span>{{ message }}</span></div>
+      {% elif message.level_tag == "warning" %}
+        <div role="alert" class="alert alert-warning"><span>{{ message }}</span></div>
+      {% elif message.level_tag == "success" %}
+        <div role="alert" class="alert alert-success"><span>{{ message }}</span></div>
+      {% else %}
+        <div role="alert" class="alert alert-info"><span>{{ message }}</span></div>
+      {% endif %}
+    {% endfor %}
+  </div>
+{% endif %}

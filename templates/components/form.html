@@ -1,0 +1,36 @@
+<form
+  method="post"
+  {% if action %}action="{{ action }}"{% endif %}
+  class="flex max-w-xl flex-col gap-4"
+  novalidate
+  {% if form_id %}id="{{ form_id }}"{% endif %}
+  {% if autocomplete %}autocomplete="{{ autocomplete }}"{% endif %}
+  {% if hx_post %}hx-post="{{ hx_post }}" hx-swap="{{ hx_swap|default:'outerHTML' }}"{% endif %}
+>
+  {% csrf_token %}
+  {% if form.non_field_errors %}
+    <div role="alert" class="alert alert-error">
+      {% for error in form.non_field_errors %}
+        <span>{{ error }}</span>
+      {% endfor %}
+    </div>
+  {% endif %}
+  {% for hidden in form.hidden_fields %}{{ hidden }}{% endfor %}
+  {% for field in form.visible_fields %}
+    <fieldset class="fieldset">
+      <label class="label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+      {{ field }}
+      {% if field.help_text %}
+        <p class="label">{{ field.help_text }}</p>
+      {% endif %}
+      {% for error in field.errors %}
+        <p class="label text-error" role="alert">{{ error }}</p>
+      {% endfor %}
+    </fieldset>
+  {% endfor %}
+  {% if show_submit != False %}
+    <div>
+      {% include "components/button.html" with label=submit_label|default:"提交" type="submit" variant=submit_variant|default:"primary" only %}
+    </div>
+  {% endif %}
+</form>

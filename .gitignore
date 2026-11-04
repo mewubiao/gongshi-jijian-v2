@@ -1,4 +1,6 @@
 .venv/
+/node_modules/
+var/
 __pycache__/
 *.py[cod]
 *.sqlite3

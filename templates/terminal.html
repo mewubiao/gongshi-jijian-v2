@@ -1,0 +1,15 @@
+{% extends "terminal_base.html" %}
+
+{% block title %}车间终端 · 工时计件{% endblock %}
+
+{% block content %}
+<section class="mx-auto flex max-w-5xl flex-col items-center gap-8 py-10 text-center">
+  <h1 class="text-4xl font-bold">请刷工牌或扫描员工二维码</h1>
+  <p>登录后 15 秒无操作将退出。报工业务还没接上，下面的按钮只展示终端尺寸。</p>
+  <div class="flex flex-wrap justify-center gap-4">
+    {% include "components/button.html" with label="开工" size="xl" variant="primary" extra_class="min-w-48" only %}
+    {% include "components/button.html" with label="完工" size="xl" variant="success" extra_class="min-w-48" only %}
+    {% include "components/button.html" with label="暂停" size="xl" variant="warning" extra_class="min-w-48" only %}
+  </div>
+</section>
+{% endblock %}
