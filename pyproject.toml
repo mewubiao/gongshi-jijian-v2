@@ -19,10 +19,24 @@ package = false
 [tool.ruff]
 target-version = "py312"
 line-length = 88
-src = ["config", "reporting"]
+src = [
+    "config",
+    "masterdata",
+    "erp",
+    "dispatch",
+    "reporting",
+    "settlement",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["config", "reporting"]
+known-first-party = [
+    "config",
+    "masterdata",
+    "erp",
+    "dispatch",
+    "reporting",
+    "settlement",
+]
