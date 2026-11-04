@@ -66,6 +66,8 @@ DATABASES = {
     }
 }
 
+# 易飞 SQL Server 不放进 DATABASES。同步用 pyodbc 只读连接，配置见 docs/ERP_SYNC.md。
+
 _VALIDATOR = "django.contrib.auth.password_validation"
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": f"{_VALIDATOR}.UserAttributeSimilarityValidator"},
