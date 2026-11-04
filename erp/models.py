@@ -1,8 +1,8 @@
 """易飞工单和入库的只读镜像，以及同步日志。
 
-TODO(易飞同步): 每 5 分钟从易飞 9.012 拉取未结工单写入本表。
-不把计件数量、工时、金额回写易飞。同步到已关闭后，已派任务仍可报完，
-但不能再新派工（由派工模型拦截）。
+同步由 `manage.py sync_erp_workorders` 执行，每 5 分钟一次。
+只拉取未结工单和生产入库，不把计件数量、工时、金额回写易飞。
+工单同步到已关闭后，已派任务仍可报完，但不能再新派工（由派工模型拦截）。
 """
 
 from django.conf import settings
@@ -326,3 +326,20 @@ class SyncState(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean()
         super().save(*args, **kwargs)
+
+
+class SyncLock(models.Model):
+    """一行锁，避免定时同步和手工同步叠在一起。不是业务镜像。"""
+
+    WORKORDERS = "workorders"
+
+    name = models.CharField(primary_key=True, max_length=32)
+    holder = models.CharField(max_length=64, blank=True, default="")
+    held_until = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "易飞同步锁"
+        verbose_name_plural = "易飞同步锁"
+
+    def __str__(self):
+        return self.name

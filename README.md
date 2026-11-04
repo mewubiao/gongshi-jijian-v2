@@ -2,7 +2,7 @@
 
 车间按工时、计件核算产量的新系统。这是工时计件的 v2，从空仓库重新搭起。
 
-当前已有一期的领域数据模型。产品规则见 [docs/DESIGN.md](docs/DESIGN.md)，模型说明见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)。
+当前已有一期的领域数据模型，以及易飞未结工单和生产入库的只读同步。入库和每一道工序报工的对照见数据模型说明。产品规则见 [docs/DESIGN.md](docs/DESIGN.md)，模型说明见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)，易飞连接和待核对项见 [docs/ERP_SYNC.md](docs/ERP_SYNC.md)。
 
 ## 技术选择
 
@@ -70,7 +70,7 @@ uv run ruff format --check .
 - `ui/`：首页、车间终端占位、组件示例。
 - `assets/css/`：Tailwind CSS 4 与 daisyUI 5 的样式入口。
 - `masterdata/`：员工、班组、工作中心、产品与工序。
-- `erp/`：易飞工单和入库只读镜像、字段映射、同步日志。
+- `erp/`：易飞工单和入库只读镜像、字段映射、同步日志，以及只读同步。
 - `dispatch/`：派工、整组组员与小组长移交。
 - `reporting/`：开工、暂停、报工、审核留痕、整组加入和离开。
 - `timekeeping/`：辅助工时。
@@ -79,6 +79,5 @@ uv run ruff format --check .
 ## 后续再做
 
 - 车间终端、派工和审核页面
-- 易飞工单同步
 - 月结汇总、整组分配和导出
 - 登录与权限

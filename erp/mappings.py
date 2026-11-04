@@ -92,6 +92,38 @@ DEFAULT_RECEIPT_MAPPINGS = (
 )
 
 
+def overlay_receipt_env(env):
+    """映射表里已经填了的列，补到还没在环境变量里出现的项上。环境变量优先。"""
+
+    from erp.models import ErpSourceMapping
+
+    merged = dict(env)
+    rows = {row.code: row for row in ErpSourceMapping.objects.all()}
+    pairs = (
+        ("receipt.table", "erp_table", "YIFEI_RECEIPT_TABLE"),
+        ("receipt.type", "erp_column", "YIFEI_RECEIPT_COL_TYPE"),
+        ("receipt.no", "erp_column", "YIFEI_RECEIPT_COL_NO"),
+        ("receipt.line", "erp_column", "YIFEI_RECEIPT_COL_LINE"),
+        ("receipt.erp_key", "erp_column", "YIFEI_RECEIPT_COL_SOURCE_KEY"),
+        ("receipt.date", "erp_column", "YIFEI_RECEIPT_COL_DATE"),
+        ("receipt.work_order_key", "erp_column", "YIFEI_RECEIPT_COL_WORK_ORDER_KEY"),
+        ("receipt.qty", "erp_column", "YIFEI_RECEIPT_COL_QTY"),
+        ("receipt.source_qty_11", "erp_column", "YIFEI_RECEIPT_COL_QTY_11"),
+        ("receipt.scrap_qty_12", "erp_column", "YIFEI_RECEIPT_COL_QTY_12"),
+        ("receipt.accepted_qty_13", "erp_column", "YIFEI_RECEIPT_COL_QTY_13"),
+    )
+    for code, attr, env_name in pairs:
+        if env_name in env:
+            continue
+        row = rows.get(code)
+        if row is None:
+            continue
+        value = getattr(row, attr)
+        if value:
+            merged[env_name] = value
+    return merged
+
+
 def seed_receipt_mappings(sender, **kwargs):
     from erp.models import ErpSourceMapping
 
