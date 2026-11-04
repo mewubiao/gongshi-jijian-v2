@@ -14,18 +14,31 @@ class WorkOrderRow:
     completed_qty: Decimal | None
     remaining_qty: Decimal | None
     status_raw: str
-    source_updated_at: datetime | None = None
-    touch_source_updated_at: bool = False
+    order_type: str = ""
+    erp_key: str = ""
+    unit: str = ""
+    start_date: date | None = None
+    due_date: date | None = None
+    source_modified_at: datetime | None = None
+    touch_source_modified_at: bool = False
     unusable_reason: str = ""
 
 
 @dataclass(frozen=True)
 class ReceiptRow:
-    source_key: str
-    order_no: str
-    quantity: Decimal
+    erp_key: str
+    receipt_type: str
+    receipt_no: str
+    line_no: str
+    order_key: str
+    receipt_qty: Decimal | None
+    source_qty_11: Decimal | None
+    scrap_qty_12: Decimal | None
+    accepted_qty_13: Decimal | None
     product_code: str = ""
     received_on: date | None = None
+    source_modified_at: datetime | None = None
+    touch_source_modified_at: bool = False
     unusable_reason: str = ""
 
 

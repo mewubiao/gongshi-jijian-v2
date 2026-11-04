@@ -78,9 +78,17 @@ def build_work_order_query(field_map):
         f"{quote_identifier(field_map.work_center_column)} AS work_center_code"
     )
     columns.append(f"{quote_identifier(field_map.status_column)} AS status_raw")
+    if field_map.erp_key_column:
+        columns.append(f"{quote_identifier(field_map.erp_key_column)} AS erp_key")
+    if field_map.unit_column:
+        columns.append(f"{quote_identifier(field_map.unit_column)} AS unit")
+    if field_map.start_date_column:
+        columns.append(f"{quote_identifier(field_map.start_date_column)} AS start_date")
+    if field_map.due_date_column:
+        columns.append(f"{quote_identifier(field_map.due_date_column)} AS due_date")
     if field_map.updated_at_column:
         columns.append(
-            f"{quote_identifier(field_map.updated_at_column)} AS source_updated_at"
+            f"{quote_identifier(field_map.updated_at_column)} AS source_modified_at"
         )
     where, params = _where(field_map)
     table = _table_sql(field_map.schema, field_map.table)
@@ -106,7 +114,18 @@ def build_receipt_query(field_map):
         columns.append(f"{quote_identifier(field_map.source_key_column)} AS source_key")
     if field_map.product_column:
         columns.append(f"{quote_identifier(field_map.product_column)} AS product_code")
-    columns.append(f"{quote_identifier(field_map.quantity_column)} AS quantity")
+    if field_map.work_order_key_column:
+        columns.append(
+            f"{quote_identifier(field_map.work_order_key_column)} AS order_key"
+        )
+    columns.append(f"{quote_identifier(field_map.quantity_column)} AS receipt_qty")
+    columns.append(
+        f"{quote_identifier(field_map.source_qty_11_column)} AS source_qty_11"
+    )
+    columns.append(f"{quote_identifier(field_map.scrap_qty_12_column)} AS scrap_qty_12")
+    columns.append(
+        f"{quote_identifier(field_map.accepted_qty_13_column)} AS accepted_qty_13"
+    )
     if field_map.received_on_column:
         columns.append(
             f"{quote_identifier(field_map.received_on_column)} AS received_on"
@@ -225,15 +244,20 @@ def parse_work_order_records(records, field_map):
                 issues.append(f"工单 {label} 的{title}无法解析")
                 return None
 
-        updated_at = None
-        if "source_updated_at" in record and record.get("source_updated_at") not in (
+        modified_at = None
+        modified_note = False
+        if "source_modified_at" in record and record.get("source_modified_at") not in (
             None,
             "",
         ):
             try:
-                updated_at = parse_source_datetime(record.get("source_updated_at"))
+                modified_at = parse_source_datetime(record.get("source_modified_at"))
             except ValueError:
+                modified_note = True
                 notes.append(f"工单 {label} 的更新时间无法解析，已忽略")
+        start_date, start_note = _optional_date(record, "start_date", label, "计划开工")
+        due_date, due_note = _optional_date(record, "due_date", label, "计划完工")
+        notes.extend(note for note in (start_note, due_note) if note)
         rows.append(
             WorkOrderRow(
                 order_no=order_no,
@@ -243,9 +267,16 @@ def parse_work_order_records(records, field_map):
                 completed_qty=quantity("completed_qty", "已完成量"),
                 remaining_qty=quantity("remaining_qty", "剩余量"),
                 status_raw=_text(record.get("status_raw")),
-                source_updated_at=updated_at,
-                touch_source_updated_at="source_updated_at" in record
-                and not any("更新时间" in note for note in notes),
+                order_type=_text(record.get("order_type"))
+                if field_map.order_type_column
+                else "",
+                erp_key=_text(record.get("erp_key")),
+                unit=_text(record.get("unit"))[:40],
+                start_date=start_date,
+                due_date=due_date,
+                source_modified_at=modified_at,
+                touch_source_modified_at="source_modified_at" in record
+                and not modified_note,
                 unusable_reason="；".join(issues),
             )
         )
@@ -260,43 +291,90 @@ def parse_receipt_records(records, field_map):
     warnings = []
     for index, record in enumerate(records, start=1):
         issues = []
-        order_no = _join_order_no(
-            _text(record.get("order_type")) if field_map.order_type_column else "",
-            _text(record.get("order_no")),
-            field_map.order_no_separator,
+        order_key = _text(record.get("order_key"))
+        if not order_key:
+            order_key = _join_order_no(
+                _text(record.get("order_type")) if field_map.order_type_column else "",
+                _text(record.get("order_no")),
+                field_map.order_no_separator,
+            )
+        receipt_type = (
+            _text(record.get("receipt_type")) if field_map.receipt_type_column else ""
         )
-        source_key = _receipt_source_key(record, field_map)
-        label = source_key or order_no or f"第 {index} 行"
-        if not order_no:
-            issues.append(f"入库 {label} 缺少工单号")
-        if not source_key:
+        receipt_no = (
+            _text(record.get("receipt_no")) if field_map.receipt_no_column else ""
+        )
+        line_no = _text(record.get("line_no")) if field_map.line_column else ""
+        erp_key = _receipt_source_key(record, field_map)
+        label = erp_key or order_key or f"第 {index} 行"
+        if not order_key:
+            issues.append(f"入库 {label} 缺少工单键")
+        if not erp_key:
             issues.append(f"入库 {label} 缺少来源键")
-        quantity = None
-        raw_qty = record.get("quantity")
-        if raw_qty is None or (isinstance(raw_qty, str) and raw_qty.strip() == ""):
-            issues.append(f"入库 {label} 缺少数量")
-        else:
+        if not receipt_type or not receipt_no or not line_no:
+            issues.append(f"入库 {label} 缺少单别、单号或行号")
+        quantities = {}
+        for alias, title in (
+            ("receipt_qty", "对账入库数量"),
+            ("source_qty_11", "TG011 数量"),
+            ("scrap_qty_12", "TG012 数量"),
+            ("accepted_qty_13", "TG013 数量"),
+        ):
+            raw_qty = record.get(alias)
+            if raw_qty is None or (isinstance(raw_qty, str) and raw_qty.strip() == ""):
+                issues.append(f"入库 {label} 缺少{title}")
+                quantities[alias] = None
+                continue
             try:
-                quantity = parse_decimal(raw_qty)
+                quantities[alias] = parse_decimal(raw_qty)
             except ValueError:
-                issues.append(f"入库 {label} 的数量无法解析")
-        received_on = None
-        if "received_on" in record and record.get("received_on") not in (None, ""):
+                issues.append(f"入库 {label} 的{title}无法解析")
+                quantities[alias] = None
+        received_on, date_note = _optional_date(
+            record, "received_on", label, "入库日期"
+        )
+        if date_note:
+            warnings.append(date_note)
+        modified_at = None
+        modified_note = False
+        if "source_modified_at" in record and record.get("source_modified_at") not in (
+            None,
+            "",
+        ):
             try:
-                received_on = parse_source_date(record.get("received_on"))
+                modified_at = parse_source_datetime(record.get("source_modified_at"))
             except ValueError:
-                warnings.append(f"入库 {label} 的日期无法解析，已忽略")
+                modified_note = True
+                warnings.append(f"入库 {label} 的更新时间无法解析，已忽略")
         rows.append(
             ReceiptRow(
-                source_key=source_key,
-                order_no=order_no,
-                quantity=quantity if quantity is not None else Decimal("0"),
+                erp_key=erp_key,
+                receipt_type=receipt_type[:40],
+                receipt_no=receipt_no[:80],
+                line_no=line_no[:40],
+                order_key=order_key[:180],
+                receipt_qty=quantities.get("receipt_qty"),
+                source_qty_11=quantities.get("source_qty_11"),
+                scrap_qty_12=quantities.get("scrap_qty_12"),
+                accepted_qty_13=quantities.get("accepted_qty_13"),
                 product_code=_text(record.get("product_code")),
                 received_on=received_on,
+                source_modified_at=modified_at,
+                touch_source_modified_at="source_modified_at" in record
+                and not modified_note,
                 unusable_reason="；".join(issues),
             )
         )
     return rows, warnings
+
+
+def _optional_date(record, alias, label, title):
+    if alias not in record or record.get(alias) in (None, ""):
+        return None, ""
+    try:
+        return parse_source_date(record.get(alias)), ""
+    except ValueError:
+        return None, f"{label} 的{title}无法解析，已忽略"
 
 
 def _receipt_source_key(record, field_map):

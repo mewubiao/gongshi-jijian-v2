@@ -2,7 +2,7 @@
 
 车间按工时、计件核算产量的新系统。这是工时计件的 v2，从空仓库重新搭起。
 
-当前已有一期的领域数据模型，以及易飞未结工单的只读同步。生产入库数量一并拉取，用来和报工数量做差异；入库落地表等数据模型分支的 ProductionReceipt，本分支不另建。产品规则见 [docs/DESIGN.md](docs/DESIGN.md)，模型说明见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)，易飞连接和待核对项见 [docs/ERP_SYNC.md](docs/ERP_SYNC.md)。
+当前已有一期的领域数据模型，以及易飞未结工单和生产入库的只读同步。入库和每一道工序报工的对照见数据模型说明。产品规则见 [docs/DESIGN.md](docs/DESIGN.md)，模型说明见 [docs/DATA_MODEL.md](docs/DATA_MODEL.md)，易飞连接和待核对项见 [docs/ERP_SYNC.md](docs/ERP_SYNC.md)。
 
 ## 技术选择
 
@@ -53,10 +53,11 @@ uv run ruff format --check .
 
 - `config/`：配置、路由，以及 `/health/`。
 - `masterdata/`：员工、班组、工作中心、产品与工序。
-- `erp/`：易飞工单只读镜像，以及只读同步。
+- `erp/`：易飞工单和入库只读镜像、字段映射、同步日志，以及只读同步。
 - `dispatch/`：派工、整组组员与小组长移交。
 - `reporting/`：开工、暂停、报工、审核留痕、整组加入和离开。
-- `settlement/`：月结期间、锁账与解锁留痕。
+- `timekeeping/`：辅助工时。
+- `settlement/`：月结期间、锁账留痕、辅助工时汇总。
 
 ## 后续再做
 

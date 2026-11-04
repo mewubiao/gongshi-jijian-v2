@@ -24,6 +24,7 @@ class ProcessAdminForm(forms.ModelForm):
         model = Process
         fields = (
             "product",
+            "operation_code",
             "sequence",
             "name",
             "unit_price",
@@ -77,9 +78,9 @@ class ProcessInline(admin.TabularInline):
 
 @admin.register(Employee)
 class EmployeeAdmin(admin.ModelAdmin):
-    list_display = ("name", "role", "badge_nfc", "qr_code", "team", "is_active")
-    list_filter = ("role", "is_active", "team")
-    search_fields = ("name", "badge_nfc", "qr_code")
+    list_display = ("code", "name", "role", "badge_nfc", "qr_code", "team", "active")
+    list_filter = ("role", "active", "team")
+    search_fields = ("code", "name", "badge_nfc", "qr_code")
 
 
 @admin.register(WorkCenter)

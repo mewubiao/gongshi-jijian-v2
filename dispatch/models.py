@@ -11,7 +11,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from erp.models import WorkOrder
-from masterdata.models import Employee, Process
+from masterdata.models import Employee, Process, Team
 from masterdata.validation import ensure_aware, ensure_two_places
 
 
@@ -51,6 +51,16 @@ class Dispatch(models.Model):
         related_name="led_dispatches",
         help_text="整组可移交。单人派工就是这名工人。不是班组长角色。",
     )
+    team = models.ForeignKey(
+        Team,
+        verbose_name="班组",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="dispatches",
+    )
+    planned_date = models.DateField("计划日期", null=True, blank=True)
+    dispatch_note = models.CharField("派工备注", max_length=500, blank=True, default="")
 
     class Meta:
         verbose_name = "派工"
@@ -135,7 +145,7 @@ class Dispatch(models.Model):
         if len(set(employee_ids)) != len(employee_ids):
             raise ValidationError("组员不能重复")
         for member in members:
-            if not member.employee.is_active:
+            if not member.employee.active:
                 raise ValidationError("不能派给已停用的员工")
         if self.kind == self.Kind.SINGLE:
             if len(members) != 1:
@@ -175,6 +185,7 @@ class Dispatch(models.Model):
                 assigned_by=assigned_by,
                 assigned_at=assigned_at,
                 current_leader=assignee,
+                team=assignee.team,
             )
             dispatch.save()
             DispatchMember.objects.create(
@@ -211,6 +222,7 @@ class Dispatch(models.Model):
                 assigned_by=assigned_by,
                 assigned_at=assigned_at,
                 current_leader=members[0],
+                team=members[0].team,
             )
             dispatch.save()
             for sequence, employee in enumerate(members, start=1):
@@ -257,7 +269,7 @@ class DispatchMember(models.Model):
     dispatch = models.ForeignKey(
         Dispatch,
         verbose_name="派工",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="members",
     )
     employee = models.ForeignKey(
@@ -296,7 +308,7 @@ class DispatchMember(models.Model):
     def clean(self):
         if self.sequence is not None and self.sequence < 1:
             raise ValidationError({"sequence": "顺序从 1 开始"})
-        if self.employee_id and not self.employee.is_active:
+        if self.employee_id and not self.employee.active:
             raise ValidationError({"employee": "不能派给已停用的员工"})
 
     def save(self, *args, **kwargs):
@@ -310,7 +322,7 @@ class LeaderTransfer(models.Model):
     dispatch = models.ForeignKey(
         Dispatch,
         verbose_name="派工",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="leader_transfers",
     )
     from_employee = models.ForeignKey(

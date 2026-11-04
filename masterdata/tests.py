@@ -25,6 +25,7 @@ class EmployeeTests(TestCase):
     def test_qr_code_is_required(self):
         with self.assertRaises(ValidationError):
             Employee.objects.create(
+                code="E-NONE",
                 name="无码",
                 role=Employee.Role.WORKER,
                 qr_code="  ",
@@ -47,6 +48,7 @@ class ShiftTests(TestCase):
         leader = make_employee("组长", Employee.Role.TEAM_LEADER)
         with self.assertRaises(ValidationError):
             Team.objects.create(
+                code="T-PARTIAL",
                 name="只填了白班",
                 work_center=center,
                 leader=leader,
@@ -54,6 +56,7 @@ class ShiftTests(TestCase):
                 day_shift_end=time(19, 0),
             )
         team = Team.objects.create(
+            code="T-FULL",
             name="整段覆盖",
             work_center=center,
             leader=leader,
@@ -112,6 +115,7 @@ class ProcessRateHistoryTests(TestCase):
         form = ProcessAdminForm(
             data={
                 "product": self.process.product_id,
+                "operation_code": self.process.operation_code,
                 "sequence": self.process.sequence,
                 "name": self.process.name,
                 "unit_price": "9.50",
@@ -127,6 +131,7 @@ class ProcessRateHistoryTests(TestCase):
         form = ProcessAdminForm(
             data={
                 "product": self.process.product_id,
+                "operation_code": self.process.operation_code,
                 "sequence": self.process.sequence,
                 "name": "只改名称",
                 "unit_price": "1.25",

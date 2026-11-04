@@ -9,12 +9,14 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from erp.models import SyncLock, SyncRun, WorkOrder
+from erp.models import SyncLock, SyncLog, SyncState, WorkOrder
 from erp.receipts import (
-    RECEIPT_NOT_READY,
+    ProductionReceiptWriter,
     ReceiptStats,
-    get_receipt_model,
+    four_places,
+    orders_by_key,
     plan_receipts,
+    products_by_code,
 )
 from masterdata.models import Product, WorkCenter
 
@@ -61,10 +63,10 @@ def _claim_lock(now, stale_seconds):
     )
     if claimed != 1:
         return None
-    SyncRun.objects.filter(status=SyncRun.Status.RUNNING).update(
-        status=SyncRun.Status.FAILED,
+    SyncLog.objects.filter(status=SyncLog.Status.RUNNING).update(
+        status=SyncLog.Status.FAILED,
         finished_at=now,
-        error="超过锁定时间仍未结束，已由新的同步接管",
+        error_summary="超过锁定时间仍未结束，已由新的同步接管",
     )
     return token
 
@@ -101,6 +103,17 @@ def _load_by_code(model, codes):
 def _two_places(value):
     quantized = value.quantize(_TWO, rounding=ROUND_HALF_UP)
     return quantized, quantized != value
+
+
+def _planned_qty(row, warnings):
+    if row.planned_qty is None:
+        return None
+    rounded, changed = four_places(row.planned_qty)
+    if changed:
+        warnings.append(
+            f"工单 {row.order_no} 的计划数量 {row.planned_qty} 已四舍五入为 {rounded}"
+        )
+    return rounded
 
 
 def _classify(status_raw, open_values, closed_values):
@@ -243,7 +256,38 @@ def apply_work_orders(fetched, field_map, *, now, token=None):
     }
 
 
+def _assign_mirror_fields(order, row, planned, warnings):
+    order.erp_order_type = (row.order_type or "")[:40]
+    order.erp_key = (row.erp_key or order.order_no)[:180]
+    order.planned_qty = planned
+    order.unit = (row.unit or "")[:40]
+    order.erp_status = (row.status_raw or "")[:20]
+    order.erp_start_date = row.start_date
+    order.erp_due_date = row.due_date
+    if row.touch_source_modified_at:
+        order.source_modified_at = row.source_modified_at
+    if len(row.status_raw or "") > 20:
+        warnings.append(f"工单 {order.order_no} 的易飞状态超过 20 字，已截断")
+
+
+def _mirror_changed(existing, row, planned):
+    erp_key = (row.erp_key or existing.order_no)[:180]
+    checks = [
+        existing.erp_order_type != (row.order_type or "")[:40],
+        existing.erp_key != erp_key,
+        existing.planned_qty != planned,
+        existing.unit != (row.unit or "")[:40],
+        existing.erp_status != (row.status_raw or "")[:20],
+        existing.erp_start_date != row.start_date,
+        existing.erp_due_date != row.due_date,
+    ]
+    if row.touch_source_modified_at:
+        checks.append(existing.source_modified_at != row.source_modified_at)
+    return any(checks)
+
+
 def _upsert_work_order(order_no, product, center, remaining, row, now, warnings):
+    planned = _planned_qty(row, warnings)
     existing = (
         WorkOrder.objects.filter(order_no=order_no).select_related("product").first()
     )
@@ -256,8 +300,7 @@ def _upsert_work_order(order_no, product, center, remaining, row, now, warnings)
             remaining_qty=remaining,
             synced_at=now,
         )
-        if row.touch_source_updated_at:
-            order.source_updated_at = row.source_updated_at
+        _assign_mirror_fields(order, row, planned, warnings)
         order.save()
         return "created"
     changed = False
@@ -278,11 +321,8 @@ def _upsert_work_order(order_no, product, center, remaining, row, now, warnings)
     if existing.status != WorkOrder.Status.OPEN:
         existing.status = WorkOrder.Status.OPEN
         changed = True
-    if (
-        row.touch_source_updated_at
-        and existing.source_updated_at != row.source_updated_at
-    ):
-        existing.source_updated_at = row.source_updated_at
+    if _mirror_changed(existing, row, planned):
+        _assign_mirror_fields(existing, row, planned, warnings)
         changed = True
     existing.synced_at = now
     existing.save()
@@ -303,15 +343,25 @@ def _close_missing(keep, now):
     return closed
 
 
-def apply_receipts(fetched, *, orders_by_no, writer, delete_missing):
+def apply_receipts(fetched, *, delete_missing, now, token=None):
+    writer = ProductionReceiptWriter()
+    known = set(orders_by_key())
     plan = plan_receipts(
         fetched.rows,
-        orders_by_no=orders_by_no,
+        known_order_keys=known,
         delete_missing=delete_missing,
         existing_keys=writer.existing_keys(),
     )
-    created, updated, unchanged, removed = writer.apply(plan)
-    warnings = [*fetched.warnings, *plan.warnings]
+    if not _holding(token):
+        raise LockLost("同步锁已过期，本次不写入入库")
+    created, updated, unchanged, removed, warnings = writer.apply(
+        plan,
+        now=now,
+        products_by_code=products_by_code(
+            {line.product_code for line in plan.desired.values()}
+        ),
+        orders_by_key=orders_by_key(),
+    )
     return ReceiptStats(
         fetched=len(fetched.rows),
         created=created,
@@ -319,41 +369,50 @@ def apply_receipts(fetched, *, orders_by_no, writer, delete_missing):
         unchanged=unchanged,
         removed=removed,
         skipped=plan.skipped,
-        warnings=warnings,
-        ready=True,
+        warnings=[*fetched.warnings, *warnings],
     )
 
 
-def _orders_by_no():
-    return {
-        order.order_no: order.product.code
-        for order in WorkOrder.objects.select_related("product")
-    }
+def _summary(warnings, error=""):
+    parts = []
+    if error:
+        parts.append(error)
+    parts.extend(cap_warnings(warnings))
+    return "\n".join(parts)[:4000]
 
 
-def _empty_receipt_stats(fetched, warnings):
-    return ReceiptStats(
-        fetched=len(fetched.rows) if fetched is not None else 0,
-        skipped=len(fetched.rows) if fetched is not None else 0,
-        warnings=warnings,
-        ready=False,
+def _write_log(
+    sync_type,
+    trigger,
+    now,
+    *,
+    status,
+    inserted,
+    updated,
+    skipped,
+    invalidated,
+    warnings,
+    error="",
+):
+    finished = timezone.now()
+    log = SyncLog.objects.create(
+        sync_type=sync_type,
+        trigger=trigger,
+        status=status,
+        started_at=now,
+        finished_at=finished,
+        inserted=inserted,
+        updated=updated,
+        skipped=skipped,
+        invalidated=invalidated,
+        error_summary=_summary(warnings, error),
     )
-
-
-def _fill_run(run, work_stats, receipt_stats):
-    run.fetched_count = work_stats["fetched"]
-    run.created_count = work_stats["created"]
-    run.updated_count = work_stats["updated"]
-    run.unchanged_count = work_stats["unchanged"]
-    run.closed_count = work_stats["closed"]
-    run.skipped_count = work_stats["skipped"]
-    run.receipt_fetched_count = receipt_stats.fetched
-    run.receipt_created_count = receipt_stats.created
-    run.receipt_updated_count = receipt_stats.updated
-    run.receipt_unchanged_count = receipt_stats.unchanged
-    run.receipt_removed_count = receipt_stats.removed
-    run.receipt_skipped_count = receipt_stats.skipped
-    run.warnings = cap_warnings([*work_stats["warnings"], *receipt_stats.warnings])
+    state, _created = SyncState.objects.get_or_create(sync_type=sync_type)
+    state.last_started_at = now
+    if status == SyncLog.Status.SUCCEEDED:
+        state.last_succeeded_at = finished
+    state.save()
+    return log
 
 
 def run_sync(
@@ -364,85 +423,96 @@ def run_sync(
     now=None,
     stale_seconds=900,
     redact="",
-    receipt_writer=None,
+    trigger=SyncLog.Trigger.MANUAL,
 ):
     now = now or timezone.now()
     token = _claim_lock(now, stale_seconds)
     if token is None:
-        return SyncRun.objects.create(
-            status=SyncRun.Status.SKIPPED,
-            started_at=now,
-            finished_at=now,
+        skipped = _write_log(
+            SyncLog.SyncType.WORK_ORDER,
+            trigger,
+            now,
+            status=SyncLog.Status.FAILED,
+            inserted=0,
+            updated=0,
+            skipped=0,
+            invalidated=0,
+            warnings=[],
             error="已有同步正在执行",
         )
-    run = SyncRun.objects.create(status=SyncRun.Status.RUNNING, started_at=now)
+        return skipped, None
     try:
         work_fetched = source.fetch_open_work_orders()
         work_stats = apply_work_orders(work_fetched, field_map, now=now, token=token)
-        receipt_stats, receipt_error = _sync_receipts(
-            source,
-            receipt_map,
-            token=token,
-            receipt_writer=receipt_writer,
+        work_log = _write_log(
+            SyncLog.SyncType.WORK_ORDER,
+            trigger,
+            now,
+            status=SyncLog.Status.SUCCEEDED,
+            inserted=work_stats["created"],
+            updated=work_stats["updated"],
+            skipped=work_stats["skipped"],
+            invalidated=work_stats["closed"],
+            warnings=work_stats["warnings"],
         )
-        run.finished_at = timezone.now()
-        _fill_run(run, work_stats, receipt_stats)
-        if receipt_error:
-            run.status = SyncRun.Status.FAILED
-            run.error = public_error(receipt_error, redact)
-            logger.error("易飞入库同步失败：%s", run.error)
-        else:
-            run.status = SyncRun.Status.SUCCESS
-            run.error = ""
-        run.save()
-    except Exception as exc:
-        run.status = SyncRun.Status.FAILED
-        run.error = public_error(exc, redact)
-        run.finished_at = timezone.now()
         try:
-            run.save()
-        except Exception:
-            logger.error("易飞同步失败，且无法记下这次运行：%s", run.error)
-        logger.error("易飞工单同步失败：%s", run.error)
+            receipt_fetched = source.fetch_production_receipts()
+            receipt_stats = apply_receipts(
+                receipt_fetched,
+                delete_missing=receipt_map.delete_missing,
+                now=now,
+                token=token,
+            )
+        except Exception as exc:
+            message = public_error(exc, redact)
+            logger.error("易飞入库同步失败：%s", message)
+            receipt_log = _write_log(
+                SyncLog.SyncType.RECEIPT,
+                trigger,
+                now,
+                status=SyncLog.Status.FAILED,
+                inserted=0,
+                updated=0,
+                skipped=0,
+                invalidated=0,
+                warnings=[],
+                error=message,
+            )
+            return work_log, receipt_log
+        receipt_log = _write_log(
+            SyncLog.SyncType.RECEIPT,
+            trigger,
+            now,
+            status=SyncLog.Status.SUCCEEDED,
+            inserted=receipt_stats.created,
+            updated=receipt_stats.updated,
+            skipped=receipt_stats.skipped,
+            invalidated=receipt_stats.removed,
+            warnings=receipt_stats.warnings,
+        )
+        return work_log, receipt_log
+    except Exception as exc:
+        message = public_error(exc, redact)
+        logger.error("易飞工单同步失败：%s", message)
+        failed = _write_log(
+            SyncLog.SyncType.WORK_ORDER,
+            trigger,
+            now,
+            status=SyncLog.Status.FAILED,
+            inserted=0,
+            updated=0,
+            skipped=0,
+            invalidated=0,
+            warnings=[],
+            error=message,
+        )
+        return failed, None
     finally:
         _release_lock(token)
-    return run
-
-
-def _sync_receipts(source, receipt_map, *, token, receipt_writer):
-    if not _holding(token):
-        raise LockLost("同步锁已过期，本次不写入入库")
-    try:
-        fetched = source.fetch_production_receipts()
-    except Exception as exc:
-        return _empty_receipt_stats(None, []), exc
-    if receipt_writer is not None:
-        writer = receipt_writer
-    elif get_receipt_model() is None:
-        return (
-            _empty_receipt_stats(fetched, [RECEIPT_NOT_READY, *fetched.warnings]),
-            None,
-        )
-    else:
-        from erp.receipts import DjangoReceiptWriter
-
-        writer = DjangoReceiptWriter()
-    try:
-        stats = apply_receipts(
-            fetched,
-            orders_by_no=_orders_by_no(),
-            writer=writer,
-            delete_missing=receipt_map.delete_missing,
-        )
-    except RuntimeError as exc:
-        if "ProductionReceipt" not in str(exc):
-            raise
-        return _empty_receipt_stats(fetched, [str(exc), *fetched.warnings]), None
-    return stats, None
 
 
 def preview_sync(source, field_map, receipt_map, *, stale_seconds=900):
-    """拉取并在事务里试算工单，然后回滚。不写同步记录，也不写入库表。"""
+    """拉取并在事务里试算，然后回滚。不写同步日志。"""
 
     now = timezone.now()
     token = _claim_lock(now, stale_seconds)
@@ -458,16 +528,12 @@ def preview_sync(source, field_map, receipt_map, *, stale_seconds=900):
                 now=now,
                 token=token,
             )
-            receipt_stats = _empty_receipt_stats(
+            receipt_stats = apply_receipts(
                 receipt_fetched,
-                [RECEIPT_NOT_READY, *receipt_fetched.warnings],
+                delete_missing=receipt_map.delete_missing,
+                now=now,
+                token=token,
             )
-            if get_receipt_model() is not None:
-                receipt_stats.warnings.insert(
-                    0,
-                    "ProductionReceipt 已在本分支，试运行还不能把它写进回滚事务。"
-                    "模型接上之后，试运行才会统计入库新增和更新。",
-                )
             transaction.set_rollback(True)
         return work_stats, receipt_stats
     finally:
@@ -475,6 +541,9 @@ def preview_sync(source, field_map, receipt_map, *, stale_seconds=900):
 
 
 def load_runtime():
+    import os
+
+    from erp.mappings import overlay_receipt_env
     from erp.source import SqlServerYifeiSource
     from erp.yifei_config import (
         load_connection_config,
@@ -484,14 +553,15 @@ def load_runtime():
     )
 
     connection = load_connection_config()
-    work_map = load_work_order_field_map()
-    receipt_map = load_receipt_field_map()
-    schedule = load_schedule_config()
+    env = overlay_receipt_env(os.environ)
+    work_map = load_work_order_field_map(env)
+    receipt_map = load_receipt_field_map(env)
+    schedule = load_schedule_config(env)
     source = SqlServerYifeiSource(connection, work_map, receipt_map)
     return source, work_map, receipt_map, schedule, connection
 
 
-def run_from_environment():
+def run_from_environment(*, trigger=SyncLog.Trigger.MANUAL):
     source, work_map, receipt_map, schedule, connection = load_runtime()
     return run_sync(
         source,
@@ -499,4 +569,5 @@ def run_from_environment():
         receipt_map,
         stale_seconds=schedule.stale_seconds,
         redact=connection.password,
+        trigger=trigger,
     )

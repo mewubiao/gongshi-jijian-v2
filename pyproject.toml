@@ -27,6 +27,7 @@ src = [
     "erp",
     "dispatch",
     "reporting",
+    "timekeeping",
     "settlement",
 ]
 
@@ -40,5 +41,6 @@ known-first-party = [
     "erp",
     "dispatch",
     "reporting",
+    "timekeeping",
     "settlement",
 ]

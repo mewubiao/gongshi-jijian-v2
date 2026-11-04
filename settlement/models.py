@@ -1,4 +1,4 @@
-"""月结期间。只做锁账、解锁和留痕，不算工资。
+"""月结期间。锁账时按员工汇总已审核辅助工时，不算这笔金额。
 
 TODO(月结): 按归属月份汇总已审核通过的报工。
 金额 = 合格件数 × 报工冻结单价，保留到分。
@@ -97,10 +97,20 @@ class SettlementPeriod(models.Model):
             ).exists()
             if pending:
                 raise ValidationError("该月还有未审核报工，不能锁账")
+            from timekeeping.models import AuxiliaryWorkLog
+
+            pending_auxiliary = AuxiliaryWorkLog.objects.filter(
+                status=AuxiliaryWorkLog.Status.PENDING_REVIEW,
+                ownership_date__year=period.year,
+                ownership_date__month=period.month,
+            ).exists()
+            if pending_auxiliary:
+                raise ValidationError("该月还有未审核辅助工时，不能锁账")
             period.status = self.Status.LOCKED
             period.locked_by = actor
             period.locked_at = at
             period.save(allow_status_change=True)
+            period.write_auxiliary_hour_summaries()
             SettlementLockEvent.objects.create(
                 period=period,
                 action=SettlementLockEvent.Action.LOCK,
@@ -125,6 +135,7 @@ class SettlementPeriod(models.Model):
             period.locked_by = None
             period.locked_at = None
             period.save(allow_status_change=True)
+            period.auxiliary_hour_summaries.all().delete()
             SettlementLockEvent.objects.create(
                 period=period,
                 action=SettlementLockEvent.Action.UNLOCK,
@@ -138,6 +149,20 @@ class SettlementPeriod(models.Model):
     def _require_admin(actor, message):
         if actor is None or actor.role != Employee.Role.ADMIN:
             raise ValidationError(message)
+
+    def write_auxiliary_hour_summaries(self):
+        """按员工重写本月已审核辅助工时。不写单价和金额。"""
+        from settlement.hours import approved_auxiliary_minutes
+
+        self.auxiliary_hour_summaries.all().delete()
+        for employee_id, minutes in approved_auxiliary_minutes(
+            self.year, self.month
+        ).items():
+            AuxiliaryHourSummary.objects.create(
+                period=self,
+                employee_id=employee_id,
+                total_minutes=minutes,
+            )
 
 
 class SettlementLockEvent(models.Model):
@@ -198,3 +223,54 @@ class SettlementLockEvent(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError("锁账留痕不能删除")
+
+
+class AuxiliaryHourSummary(models.Model):
+    """某员工在该归属月已审核通过的辅助工时合计。只记分钟。"""
+
+    period = models.ForeignKey(
+        SettlementPeriod,
+        verbose_name="月结期间",
+        on_delete=models.PROTECT,
+        related_name="auxiliary_hour_summaries",
+    )
+    employee = models.ForeignKey(
+        Employee,
+        verbose_name="员工",
+        on_delete=models.PROTECT,
+        related_name="auxiliary_hour_summaries",
+    )
+    total_minutes = models.DecimalField(
+        "合计分钟",
+        max_digits=22,
+        decimal_places=4,
+    )
+    unit_price = models.DecimalField(
+        "单价",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="预留。锁账汇总不填写，不参与计算。",
+    )
+    amount = models.DecimalField(
+        "金额",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="预留。锁账汇总不填写，不参与计算。",
+    )
+
+    class Meta:
+        verbose_name = "辅助工时月结"
+        verbose_name_plural = "辅助工时月结"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["period", "employee"],
+                name="aux_hour_summary_employee",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.period} {self.employee} {self.total_minutes}"

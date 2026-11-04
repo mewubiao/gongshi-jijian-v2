@@ -52,25 +52,30 @@
 | 入库单号 | `TG002` | `YIFEI_RECEIPT_COL_NO` |
 | 序号 | `TG003` | `YIFEI_RECEIPT_COL_LINE` |
 | 品号 | `TG004` | `YIFEI_RECEIPT_COL_PRODUCT` |
-| 数量 | `TG011` | `YIFEI_RECEIPT_COL_QTY` |
+| 对账入库数量 | `TG013` | `YIFEI_RECEIPT_COL_QTY` |
+| TG011 原始数量 | `TG011` | `YIFEI_RECEIPT_COL_QTY_11` |
+| TG012 原始数量 | `TG012` | `YIFEI_RECEIPT_COL_QTY_12` |
+| TG013 原始数量 | `TG013` | `YIFEI_RECEIPT_COL_QTY_13` |
 | 日期 | 不默认 | `YIFEI_RECEIPT_COL_DATE` |
 | 单独的来源键 | 不默认 | `YIFEI_RECEIPT_COL_SOURCE_KEY` |
 
-来源键默认是 `入库单别-入库单号-序号`。也可以改成一列来源键。数量列可能是验收数量而不是入库数量，必须核对。退库若用负数表示，合计时会减掉；若客户库用另一张表表示退库，要改映射。
+这些列名来自旧系统注释，**待核对**。`ErpSourceMapping` 里已经写了同样的列名，并且 `verified=False`。环境变量如果设置了，就盖过映射表。
 
-入库行上的工单在本地不存在时跳过并告警，不因此新建工单。品号和工单产品不一致时仍按工单记入，并告警。是否必须一致，待核对。
+来源键默认是 `入库单别-入库单号-序号`，写入 `ProductionReceipt.erp_key`。对账数量写入 `receipt_qty`，默认取 `TG013`。`TG011`、`TG012`、`TG013` 三个原始数量都存下来。对账数量为负的行跳过，因为模型不允许负数。
 
-`YIFEI_RECEIPT_DELETE_MISSING` 默认 `no`：只新增和更新，不删除本地多出来的入库行。查询被确认是全量快照之后，再设为 `yes`。默认不删，是为了避免未核对的过滤条件把入库删掉。
+本地没有这张工单时，入库行仍然写入，工单外键留空，并告警。品号在本系统不存在时，产品外键留空。品号和工单产品不一致时仍写入，并告警。是否必须一致，待核对。
 
-入库要落到 `ProductionReceipt`。这张表由数据模型分支（PR #3，`cursor/domain-models-569b`）按旧系统的 ProductionReceipt 增加。本分支不另建入库表。模型合并进来之前，工单同步照常写入，入库只拉取并在 `SyncRun.warnings` 里说明没写入。
+`YIFEI_RECEIPT_DELETE_MISSING` 默认 `no`。设为 `yes` 时，这次结果里没有的有效入库行改成 `active_source_record=False`，不物理删除。默认不改，避免未核对的过滤条件把入库标失效。
+
+同步日志用 `SyncLog`，最近成功时间用 `SyncState`。工单和入库各记一条。
 
 ## 差异
 
-`python manage.py work_order_variances` 按工单打印：
+差异口径以 [DATA_MODEL.md](DATA_MODEL.md) 为准，计算用 `work_order_quantity_comparison`，不另写一套。
 
-差额 = 生产入库数量合计 − 报工数量。
+入库数是这张工单当前有效入库行的 `receipt_qty` 合计，不按工序拆开。产品上的每一道工序都单独列出：审核通过数量，以及全部未撤回报工数量。有修正时用修正后的数量。没有报工的工序也列出，数量为 0。差异 = 报工数量 − 入库数量。
 
-报工数量的暂定口径见 [DATA_MODEL.md](DATA_MODEL.md)：待审核和已审核通过的有效完工数量（含审核修正），不含已撤回和已驳回。入库模型还没落地时，入库和差额打印为 `—`，不当成 0。
+`python manage.py work_order_variances` 只是把这个结果打出来。
 
 ## 连接
 
@@ -98,7 +103,11 @@
 | `YIFEI_RECEIPT_SCHEMA` | 入库表架构 | 空 |
 | `YIFEI_RECEIPT_EXTRA_FILTERS` | 入库附加条件 | 空 |
 | `YIFEI_RECEIPT_KEY_SEPARATOR` | 入库来源键连接符 | `-` |
-| `YIFEI_RECEIPT_DELETE_MISSING` | 全量快照时删掉缺失行 | `no` |
+| `YIFEI_RECEIPT_COL_QTY` | 对账入库数量列 | `TG013` |
+| `YIFEI_RECEIPT_COL_QTY_11` | TG011 原始数量列 | `TG011` |
+| `YIFEI_RECEIPT_COL_QTY_12` | TG012 原始数量列 | `TG012` |
+| `YIFEI_RECEIPT_COL_QTY_13` | TG013 原始数量列 | `TG013` |
+| `YIFEI_RECEIPT_DELETE_MISSING` | 全量快照时把缺失行标为失效 | `no` |
 | `YIFEI_SYNC_INTERVAL_SECONDS` | 定时间隔 | `300` |
 | `YIFEI_SYNC_STALE_SECONDS` | 锁过期 | `900` |
 
@@ -117,7 +126,7 @@ python manage.py sync_erp_workorders --dry-run
 python manage.py sync_erp_workorders
 ```
 
-`--dry-run` 会试算工单变更并回滚，不写 `SyncRun`，也不写入库。确认 `SyncRun` 的条数和告警之后，再单独起调度：
+`--dry-run` 会试算工单和入库变更并回滚，不写 `SyncLog`。确认日志里的条数和告警之后，再单独起调度：
 
 ```bash
 python manage.py run_erp_scheduler
@@ -160,4 +169,3 @@ RUN apt-get update \
 7. 入库如何对应工单（单别 + 单号，或别的键），来源键用单别、单号、序号，还是有单独的唯一列。
 8. 入库查询是不是全量。是全量的话，才打开 `YIFEI_RECEIPT_DELETE_MISSING`。
 9. 入库品号是否必须和工单产品一致。
-10. 差异口径是否就是“入库合计减待审核与已审核通过的有效报工数量”。

@@ -16,27 +16,27 @@ JOB_ID = "sync_erp_workorders"
 
 
 def scheduled_sync():
+    from erp.models import SyncLog
     from erp.sync import run_from_environment
     from erp.yifei_config import YifeiConfigError
 
     try:
-        run = run_from_environment()
+        work_log, receipt_log = run_from_environment(trigger=SyncLog.Trigger.SCHEDULED)
     except YifeiConfigError as exc:
         logger.error("易飞同步配置不可用：%s", exc)
         return
     except Exception as exc:
         logger.error("易飞定时同步没有完成：%s", exc)
         return
+    receipt_status = receipt_log.status if receipt_log is not None else "未执行"
     logger.info(
-        "易飞同步 %s 工单拉取 %s 新增 %s 更新 %s 关闭 %s 跳过 %s；入库拉取 %s 跳过 %s",
-        run.status,
-        run.fetched_count,
-        run.created_count,
-        run.updated_count,
-        run.closed_count,
-        run.skipped_count,
-        run.receipt_fetched_count,
-        run.receipt_skipped_count,
+        "易飞同步 工单 %s 新增 %s 更新 %s 跳过 %s 关闭 %s；入库 %s",
+        work_log.status,
+        work_log.inserted,
+        work_log.updated,
+        work_log.skipped,
+        work_log.invalidated,
+        receipt_status,
     )
 
 

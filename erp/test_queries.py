@@ -35,7 +35,10 @@ class QueryTests(SimpleTestCase):
         self.assertIn("FROM [MOCTG]", sql)
         self.assertIn("[TG014] AS order_type", sql)
         self.assertIn("[TG015] AS order_no", sql)
-        self.assertIn("[TG011] AS quantity", sql)
+        self.assertIn("[TG013] AS receipt_qty", sql)
+        self.assertIn("[TG011] AS source_qty_11", sql)
+        self.assertIn("[TG012] AS scrap_qty_12", sql)
+        self.assertIn("[TG013] AS accepted_qty_13", sql)
         self.assertIn("[TG022] = ?", sql)
         self.assertEqual(params, ["Y"])
         self.assertNotIn("INSERT", sql.upper())
@@ -59,7 +62,7 @@ class QueryTests(SimpleTestCase):
                     "completed_qty": "40",
                     "work_center_code": "WC1",
                     "status_raw": "1 ",
-                    "source_updated_at": "20261104153000",
+                    "source_modified_at": "20261104153000",
                 }
             ],
             load_work_order_field_map({}),
@@ -68,8 +71,8 @@ class QueryTests(SimpleTestCase):
         self.assertEqual(rows[0].order_no, "5101-1001")
         self.assertEqual(rows[0].status_raw, "1")
         self.assertEqual(rows[0].planned_qty, Decimal("100.00"))
-        self.assertFalse(timezone.is_naive(rows[0].source_updated_at))
-        local = timezone.localtime(rows[0].source_updated_at)
+        self.assertFalse(timezone.is_naive(rows[0].source_modified_at))
+        local = timezone.localtime(rows[0].source_modified_at)
         self.assertEqual(local, datetime(2026, 11, 4, 15, 30, tzinfo=local.tzinfo))
 
     def test_receipt_parser_builds_a_source_key(self):
@@ -82,15 +85,18 @@ class QueryTests(SimpleTestCase):
                     "receipt_no": "1",
                     "line_no": "0001",
                     "product_code": "P1",
-                    "quantity": "2.50",
+                    "receipt_qty": "2.50",
+                    "source_qty_11": "2.50",
+                    "scrap_qty_12": "0",
+                    "accepted_qty_13": "2.50",
                 }
             ],
             load_receipt_field_map({}),
         )
         self.assertEqual(warnings, [])
-        self.assertEqual(rows[0].source_key, "5801-1-0001")
-        self.assertEqual(rows[0].order_no, "5101-1001")
-        self.assertEqual(rows[0].quantity, Decimal("2.50"))
+        self.assertEqual(rows[0].erp_key, "5801-1-0001")
+        self.assertEqual(rows[0].order_key, "5101-1001")
+        self.assertEqual(rows[0].receipt_qty, Decimal("2.50"))
         self.assertEqual(rows[0].unusable_reason, "")
 
     def test_unparseable_receipt_quantity_does_not_raise(self):
@@ -100,10 +106,13 @@ class QueryTests(SimpleTestCase):
                     "order_no": "1001",
                     "receipt_no": "1",
                     "line_no": "1",
-                    "quantity": "abc",
+                    "receipt_qty": "abc",
+                    "source_qty_11": "1",
+                    "scrap_qty_12": "0",
+                    "accepted_qty_13": "1",
                 }
             ],
             load_receipt_field_map({"YIFEI_RECEIPT_COL_ORDER_TYPE": ""}),
         )
         self.assertIn("无法解析", rows[0].unusable_reason)
-        self.assertEqual(rows[0].source_key, "1-1")
+        self.assertEqual(rows[0].erp_key, "1-1")

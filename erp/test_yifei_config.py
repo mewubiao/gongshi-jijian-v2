@@ -21,7 +21,10 @@ class YifeiConfigTests(SimpleTestCase):
         self.assertEqual(work_orders.open_status_values, ("1", "2", "3"))
         self.assertEqual(work_orders.closed_status_values, ("Y", "y"))
         self.assertEqual(receipts.table, "MOCTG")
-        self.assertEqual(receipts.quantity_column, "TG011")
+        self.assertEqual(receipts.quantity_column, "TG013")
+        self.assertEqual(receipts.source_qty_11_column, "TG011")
+        self.assertEqual(receipts.scrap_qty_12_column, "TG012")
+        self.assertEqual(receipts.accepted_qty_13_column, "TG013")
         self.assertFalse(receipts.delete_missing)
 
     def test_environment_overrides_table_and_rejects_unsafe_names(self):

@@ -148,6 +148,10 @@ class WorkOrderFieldMap:
     work_center_column: str
     status_column: str
     updated_at_column: str
+    erp_key_column: str
+    unit_column: str
+    start_date_column: str
+    due_date_column: str
     open_status_values: tuple
     closed_status_values: tuple
     extra_filters: tuple
@@ -168,7 +172,11 @@ class ReceiptFieldMap:
     source_key_column: str
     key_separator: str
     product_column: str
+    work_order_key_column: str
     quantity_column: str
+    source_qty_11_column: str
+    scrap_qty_12_column: str
+    accepted_qty_13_column: str
     received_on_column: str
     extra_filters: tuple
     delete_missing: bool
@@ -251,6 +259,10 @@ def load_work_order_field_map(env=None):
         updated_at_column=_optional_identifier(
             _pick(env, "YIFEI_COL_UPDATED_AT", "MODI_DATE")
         ),
+        erp_key_column=_optional_identifier(_pick(env, "YIFEI_COL_ERP_KEY", "")),
+        unit_column=_optional_identifier(_pick(env, "YIFEI_COL_UNIT", "")),
+        start_date_column=_optional_identifier(_pick(env, "YIFEI_COL_START_DATE", "")),
+        due_date_column=_optional_identifier(_pick(env, "YIFEI_COL_DUE_DATE", "")),
         open_status_values=_statuses(
             env, "YIFEI_OPEN_STATUSES", "1,2,3", allow_empty=False
         ),
@@ -294,8 +306,20 @@ def load_receipt_field_map(env=None):
         product_column=_optional_identifier(
             _pick(env, "YIFEI_RECEIPT_COL_PRODUCT", "TG004")
         ),
+        work_order_key_column=_optional_identifier(
+            _pick(env, "YIFEI_RECEIPT_COL_WORK_ORDER_KEY", "")
+        ),
         quantity_column=_required_identifier(
-            "入库数量列", _pick(env, "YIFEI_RECEIPT_COL_QTY", "TG011")
+            "对账入库数量列", _pick(env, "YIFEI_RECEIPT_COL_QTY", "TG013")
+        ),
+        source_qty_11_column=_required_identifier(
+            "TG011 数量列", _pick(env, "YIFEI_RECEIPT_COL_QTY_11", "TG011")
+        ),
+        scrap_qty_12_column=_required_identifier(
+            "TG012 数量列", _pick(env, "YIFEI_RECEIPT_COL_QTY_12", "TG012")
+        ),
+        accepted_qty_13_column=_required_identifier(
+            "TG013 数量列", _pick(env, "YIFEI_RECEIPT_COL_QTY_13", "TG013")
         ),
         received_on_column=_optional_identifier(
             _pick(env, "YIFEI_RECEIPT_COL_DATE", "")

@@ -32,11 +32,20 @@ def make_center(code=None, **times):
 def make_employee(name, role, **kwargs):
     sequence = Employee.objects.count() + 1
     qr_code = kwargs.pop("qr_code", None) or f"qr-{sequence}-{name}"
-    return Employee.objects.create(name=name, role=role, qr_code=qr_code, **kwargs)
+    code = kwargs.pop("code", None) or f"E{sequence:04d}"
+    return Employee.objects.create(
+        name=name,
+        role=role,
+        qr_code=qr_code,
+        code=code,
+        **kwargs,
+    )
 
 
 def make_team(center, leader, name="甲班", **times):
+    code = times.pop("code", None) or f"T{Team.objects.count() + 1:03d}"
     team = Team.objects.create(
+        code=code,
         name=name,
         work_center=center,
         leader=leader,
@@ -56,9 +65,11 @@ def make_product(code=None, name=None):
 
 def make_process(product, **kwargs):
     sequence = kwargs.pop("sequence", 10)
+    operation_code = kwargs.pop("operation_code", None) or f"OP{sequence}"
     return Process.objects.create(
         product=product,
         sequence=sequence,
+        operation_code=operation_code,
         name=kwargs.pop("name", f"工序{sequence}"),
         unit_price=Decimal(kwargs.pop("unit_price", "1.25")),
         standard_minutes=Decimal(kwargs.pop("standard_minutes", "30.00")),
