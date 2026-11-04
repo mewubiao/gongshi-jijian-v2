@@ -17,6 +17,8 @@ ALLOWED_HOSTS = [
 ]
 
 INSTALLED_APPS = [
+    "unfold",
+    "ui",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -46,13 +48,14 @@ ROOT_URLCONF = "config.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "ui.context_processors.gallery_flags",
             ],
         },
     },
@@ -86,5 +89,22 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+STATICFILES_DIRS = [BASE_DIR / "static"]
+
+UNFOLD = {
+    "SITE_TITLE": "工时计件",
+    "SITE_HEADER": "工时计件",
+    "SITE_SUBHEADER": "后台管理",
+    "SITE_URL": "/",
+    "THEME": "light",
+    "ENVIRONMENT": "config.settings.unfold_environment",
+}
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+def unfold_environment(request):
+    """后台右上角的环境标记。业务页面不使用 Unfold。"""
+    if DEBUG:
+        return ["开发", "warning"]
+    return ["正式", "success"]

@@ -1,0 +1,48 @@
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    {% if caption %}
+      <caption class="px-4 py-3 text-left text-base font-medium">{{ caption }}</caption>
+    {% endif %}
+    <thead>
+      <tr>
+        {% for column in columns %}
+          <th>{{ column }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% if rows %}
+        {% for row in rows %}
+          <tr>
+            {% for cell in row %}
+              <td>{{ cell }}</td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td colspan="{% if columns %}{{ columns|length }}{% else %}1{% endif %}" class="text-center text-base-content/60">
+            {{ empty_text|default:"暂无数据" }}
+          </td>
+        </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+<div class="{% if page %}mt-4 flex justify-end{% endif %}" data-slot="pagination">
+  {% if page %}
+    <div class="join">
+      {% if page.has_previous %}
+        <a class="join-item btn" href="?page={{ page.previous_page_number }}">上一页</a>
+      {% else %}
+        <button type="button" class="join-item btn btn-disabled">上一页</button>
+      {% endif %}
+      <button type="button" class="join-item btn btn-active">第 {{ page.number }} / {{ page.paginator.num_pages }} 页</button>
+      {% if page.has_next %}
+        <a class="join-item btn" href="?page={{ page.next_page_number }}">下一页</a>
+      {% else %}
+        <button type="button" class="join-item btn btn-disabled">下一页</button>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>

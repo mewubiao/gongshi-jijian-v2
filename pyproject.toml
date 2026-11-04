@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "apscheduler>=3.10.4,<4",
     "django>=5.2.19,<5.3",
+    "django-unfold>=0.110.1,<0.111",
     "pyodbc>=5.2",
 ]
 
@@ -23,6 +24,7 @@ target-version = "py312"
 line-length = 88
 src = [
     "config",
+    "ui",
     "masterdata",
     "erp",
     "dispatch",
@@ -37,6 +39,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.ruff.lint.isort]
 known-first-party = [
     "config",
+    "ui",
     "masterdata",
     "erp",
     "dispatch",

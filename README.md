@@ -10,6 +10,7 @@
 - 骨架锁定在 Django 5.2。这一支的安全更新支持到 2028 年 4 月，适合会长期运行的车间系统。
 - 依赖用 [uv](https://docs.astral.sh/uv/) 管理，锁定文件是 `uv.lock`。
 - 检查和格式化用 Ruff。
+- 业务页面用 Django 模板、HTMX、Tailwind CSS 和 daisyUI，后台用 Django Unfold。约定见 [docs/FRONTEND.md](docs/FRONTEND.md)，硬规则见 [AGENTS.md](AGENTS.md)。
 
 ## 本地运行
 
@@ -39,6 +40,19 @@ uv run python manage.py runserver
 | `DJANGO_DEBUG` | 设为 `false` |
 | `DJANGO_ALLOWED_HOSTS` | 允许的域名，用逗号分隔 |
 
+## 前端
+
+页面布局、组件和样式的约定在 [docs/FRONTEND.md](docs/FRONTEND.md)。后续开发必须遵守 [AGENTS.md](AGENTS.md) 里的六条硬规则。
+
+本地调试时可以打开：
+
+- <http://127.0.0.1:8000/> 首页
+- <http://127.0.0.1:8000/terminal/> 车间终端占位
+- <http://127.0.0.1:8000/ui/> 组件示例（调试模式或登录后）
+- <http://127.0.0.1:8000/admin/> 后台，Django Unfold，中文界面
+
+改了模板里的 class 之后，运行 `./scripts/build-css.sh`，并提交 `static/css/app.css`。
+
 ## 检查
 
 ```bash
@@ -52,6 +66,9 @@ uv run ruff format --check .
 ## 目录
 
 - `config/`：配置、路由，以及 `/health/`。
+- `templates/`：页面布局和可复用组件。
+- `ui/`：首页、车间终端占位、组件示例。
+- `assets/css/`：Tailwind CSS 4 与 daisyUI 5 的样式入口。
 - `masterdata/`：员工、班组、工作中心、产品与工序。
 - `erp/`：易飞工单和入库只读镜像、字段映射、同步日志，以及只读同步。
 - `dispatch/`：派工、整组组员与小组长移交。

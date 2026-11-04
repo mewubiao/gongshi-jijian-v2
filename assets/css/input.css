@@ -1,0 +1,9 @@
+/* 锁定 Tailwind CSS 4.3.4、daisyUI 5.7.50。改 class 后运行 scripts/build-css.sh。 */
+@import "tailwindcss" source(none);
+
+@source "../../templates";
+@source "../../ui";
+
+@plugin "daisyui" {
+  themes: light --default;
+}

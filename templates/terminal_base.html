@@ -1,0 +1,18 @@
+{% extends "shell.html" %}
+
+{% block body %}
+<div id="app-terminal" class="flex min-h-screen flex-col bg-base-200 text-xl">
+  <header id="app-topnav" class="navbar min-h-20 border-b border-base-300 bg-base-100 px-6">
+    <div class="flex-1 text-2xl font-bold">车间终端</div>
+    <div class="flex-none items-center gap-3">
+      <span>{% if user.is_authenticated %}{{ user.get_username }}{% else %}未登录{% endif %}</span>
+      {% url 'home' as home_url %}
+      {% include "components/button.html" with label="返回首页" href=home_url variant="ghost" size="lg" only %}
+    </div>
+  </header>
+  <main id="app-content" class="flex-1 p-8">
+    {% include "components/messages.html" %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+{% endblock %}

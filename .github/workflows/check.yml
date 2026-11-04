@@ -15,6 +15,8 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --frozen
+      - run: ./scripts/build-css.sh
+      - run: git diff --exit-code -- static/css/app.css
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run python manage.py check
