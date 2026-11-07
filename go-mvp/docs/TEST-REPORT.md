@@ -2,6 +2,8 @@
 
 2026-11-08，macOS arm64；Go 1.26.5、Node22.23.1、PostgreSQL15.18；浏览器使用 Playwright 驱动本机 Microsoft Edge Chromium。源码和 PR 的最终提交号见 WB-3 交付评论。
 
+后续已从 issue 下载包独立启动复核，并修复 CI 容器启动参数配置。最新复核范围和结果见 [独立交付复核](DELIVERY-REVIEW.md)，原始实测记录保留如下。
+
 ## 已完成验证
 
 | 检查 | 结果 |

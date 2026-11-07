@@ -15,7 +15,11 @@ jobs:
           POSTGRES_PASSWORD: local-ci-only
           POSTGRES_DB: workshop
         ports: ['5432:5432']
-        options: --health-cmd 'pg_isready -U workshop -d workshop' --health-interval 5s --health-timeout 3s --health-retries 20
+        options: >-
+          --health-cmd "pg_isready -U workshop -d workshop"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     defaults:
       run:
         working-directory: go-mvp
