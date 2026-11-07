@@ -1,0 +1,24 @@
+[Unit]
+Description=Workshop time and piecework MVP
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=workshop
+Group=workshop
+WorkingDirectory=/opt/workshop
+EnvironmentFile=/etc/workshop/workshop.env
+ExecStart=/opt/workshop/workshop -migrate
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
