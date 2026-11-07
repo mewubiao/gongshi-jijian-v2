@@ -1,9 +1,11 @@
 from django.contrib import admin
+from unfold.admin import ModelAdmin, TabularInline
 
+from accounts.admin import ScopedAdminMixin
 from dispatch.models import Dispatch, DispatchMember, LeaderTransfer
 
 
-class DispatchMemberInline(admin.TabularInline):
+class DispatchMemberInline(TabularInline):
     model = DispatchMember
     extra = 0
     can_delete = False
@@ -13,7 +15,7 @@ class DispatchMemberInline(admin.TabularInline):
         return False
 
 
-class LeaderTransferInline(admin.TabularInline):
+class LeaderTransferInline(TabularInline):
     model = LeaderTransfer
     extra = 0
     can_delete = False
@@ -24,7 +26,7 @@ class LeaderTransferInline(admin.TabularInline):
 
 
 @admin.register(Dispatch)
-class DispatchAdmin(admin.ModelAdmin):
+class DispatchAdmin(ScopedAdminMixin, ModelAdmin):
     list_display = (
         "work_order",
         "process",

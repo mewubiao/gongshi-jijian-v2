@@ -38,7 +38,7 @@ class SettlementTests(TestCase):
         october.lock(admin_user, at=at(2026, 11, 2, 11, 0))
         report.refresh_from_db()
         with self.assertRaises(ValidationError):
-            report.reverse_approval()
+            report.reverse_approval(actor=admin_user)
         with self.assertRaises(ValidationError):
             report.correct(
                 reason="想改",
@@ -55,7 +55,7 @@ class SettlementTests(TestCase):
         self.assertEqual(event.reason, "补审一张")
         self.assertEqual(october.status, SettlementPeriod.Status.OPEN)
 
-        report.reverse_approval()
+        report.reverse_approval(actor=admin_user)
         report.refresh_from_db()
         self.assertEqual(report.status, PieceReport.Status.PENDING)
         with self.assertRaises(ValidationError):

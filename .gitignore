@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.sqlite3
+*.sqlite3-*
 .env
 .env.*
 .ruff_cache/
@@ -10,3 +11,5 @@ staticfiles/
 *.egg-info/
 dist/
 build/
+.mvp-demo-credentials.txt
+.mvp-demo-server.log

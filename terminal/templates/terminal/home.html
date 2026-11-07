@@ -1,0 +1,24 @@
+{% extends "terminal/base.html" %}
+{% block title %}我的任务{% endblock %}
+{% block content %}
+<h1>{{ employee.name }}，请选择任务</h1>
+<p class="muted">默认显示待处理任务，正在计时的排在前面。整组由当前小组长操作。</p>
+<form method="get" class="filters" role="search">
+  <div><label for="task-query">工单／产品／工序</label><input id="task-query" name="q" value="{{ query }}" maxlength="100" type="search" placeholder="输入工单号或名称"></div>
+  <div><label for="task-state">任务范围</label><select id="task-state" name="state"><option value="active"{% if state == 'active' %} selected{% endif %}>待处理任务</option><option value="all"{% if state == 'all' %} selected{% endif %}>全部任务</option></select></div>
+  <button class="secondary">查询</button><a href="{% url 'terminal:home' %}">重置</a>
+</form>
+<div class="grid">
+{% for task in tasks %}
+  <article class="task-card">
+    <span class="badge">{{ task.get_kind_display }} · {% if task.has_open_session %}{% if task.is_paused %}已暂停{% else %}进行中{% endif %}{% elif task.latest_status == 'withdrawn' %}可重新开工{% else %}{{ task.status_label }}{% endif %}</span>
+    <h2>{{ task.process.name }}</h2><p>{{ task.work_order.order_no }} · {{ task.work_order.product.name }}</p>
+    <p>派工数量 {{ task.quantity }}{% if task.kind == 'group' %} · 小组长 {{ task.current_leader.name }}{% endif %}</p>
+    <footer><small>{{ task.planned_date|date:'m-d'|default:'未指定计划日' }}</small><a class="button secondary" href="{% url 'terminal:task' task.pk %}">{% if task.current_leader_id != employee.pk %}查看任务{% elif task.has_open_session %}继续报工{% elif task.latest_status == 'rejected' %}处理驳回{% elif not task.latest_status or task.latest_status == 'withdrawn' %}开工{% else %}查看结果{% endif %}</a></footer>
+  </article>
+{% empty %}
+  <div class="panel empty"><h2>暂无符合条件的任务</h2><p>可切换“全部任务”查看已报记录，或联系班组长安排任务。</p></div>
+{% endfor %}
+</div>
+{% include "workflow/pagination.html" %}
+{% endblock %}

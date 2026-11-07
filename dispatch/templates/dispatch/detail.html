@@ -1,0 +1,8 @@
+{% extends "accounts/base.html" %}
+{% block title %}派工单 #{{ record.pk }} · 工时计件{% endblock %}
+{% block content %}<div class="workspace">
+<a class="back-link" href="{% url 'dispatch:list' %}">← 返回派工管理</a><section class="page-heading"><div><p class="eyebrow">派工任务</p><h1>派工单 #{{ record.pk }}</h1><p class="muted">{{ record.work_order.order_no }} · {{ record.process.name }}</p></div><span class="badge">{{ record.get_kind_display }}</span></section>
+<section class="panel"><dl class="facts"><div><dt>产品</dt><dd>{{ record.work_order.product.name }}</dd></div><div><dt>派工数量</dt><dd>{{ record.quantity }}</dd></div><div><dt>归属班组</dt><dd>{{ record.team.name }}</dd></div><div><dt>当前执行人／小组长</dt><dd>{{ record.current_leader.name }}</dd></div><div><dt>派工人</dt><dd>{{ record.assigned_by.name }}</dd></div><div><dt>派工时间</dt><dd>{{ record.assigned_at|date:'Y-m-d H:i:s' }}</dd></div><div><dt>计划日期</dt><dd>{{ record.planned_date|date:'Y-m-d'|default:'—' }}</dd></div><div><dt>备注</dt><dd>{{ record.dispatch_note|default:'—' }}</dd></div></dl></section>
+<section class="panel"><h2>派工名单</h2><ol class="member-list">{% for member in members %}<li>{{ member.employee.code }} · {{ member.employee.name }}{% if record.kind == 'group' and member.sequence == 1 %}<span class="badge">初始小组长 · 尾差接收人</span>{% endif %}</li>{% endfor %}</ol></section>
+<section class="panel"><h2>报工记录</h2><ul class="history">{% for report in reports %}<li><a href="{% url 'reporting:detail' report.pk %}">报工 #{{ report.pk }}</a> · {{ report.get_status_display }} · {{ report.completed_qty }} 件 · {{ report.submitted_at|date:'Y-m-d H:i' }}</li>{% empty %}<li class="muted">尚无报工记录。</li>{% endfor %}</ul></section>
+</div>{% endblock %}

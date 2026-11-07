@@ -1,0 +1,22 @@
+{% extends "accounts/base.html" %}
+{% block title %}登录 · 工时计件{% endblock %}
+{% block content %}
+<section class="auth-card" aria-labelledby="login-title">
+  <p class="eyebrow">欢迎使用</p>
+  <h1 id="login-title">登录工作台</h1>
+  <p class="muted">使用管理员分配的账号，进入你的工作空间。</p>
+  <form method="post" class="stack">
+    {% csrf_token %}
+    {% if form.non_field_errors %}<div class="error" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+    {% for field in form %}
+    <div class="field">
+      {{ field.label_tag }}{{ field }}
+      {% if field.errors %}<div class="error" role="alert">{{ field.errors }}</div>{% endif %}
+    </div>
+    {% endfor %}
+    <input type="hidden" name="next" value="{{ next }}">
+    <button type="submit" class="primary">登录</button>
+  </form>
+  <p class="hint">账号未关联员工、已停用或忘记密码时，请联系系统管理员。</p>
+</section>
+{% endblock %}

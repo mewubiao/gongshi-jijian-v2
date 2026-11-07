@@ -1,7 +1,8 @@
-from django import forms
 from django.contrib import admin
-from django.core.exceptions import ValidationError
+from unfold.admin import ModelAdmin, TabularInline
 
+from masterdata.access import employee_for_user
+from masterdata.forms import ProcessRateForm
 from masterdata.models import (
     Employee,
     Process,
@@ -12,60 +13,36 @@ from masterdata.models import (
 )
 
 
-class ProcessAdminForm(forms.ModelForm):
-    changed_by = forms.ModelChoiceField(
-        label="修改人",
-        queryset=Employee.objects.filter(role=Employee.Role.PROCESS_ENGINEER),
-        required=False,
-        help_text="修改单价或标准工时时必填，须为工艺人员。",
-    )
-
-    class Meta:
-        model = Process
-        fields = (
-            "product",
-            "operation_code",
-            "sequence",
-            "name",
-            "unit_price",
-            "standard_minutes",
-        )
-
-    def clean(self):
-        cleaned = super().clean()
-        if not self.instance.pk:
-            return cleaned
-        price = cleaned.get("unit_price")
-        minutes = cleaned.get("standard_minutes")
-        if price is None or minutes is None:
-            return cleaned
-        changed = (
-            price != self.instance.unit_price
-            or minutes != self.instance.standard_minutes
-        )
-        if changed and cleaned.get("changed_by") is None:
-            raise ValidationError("修改单价或标准工时必须记录修改人")
-        return cleaned
-
-
-class ProcessRateHistoryInline(admin.TabularInline):
+class ProcessRateHistoryInline(TabularInline):
     model = ProcessRateHistory
     extra = 0
     can_delete = False
     readonly_fields = (
-        "changed_by",
+        "changed_by_name",
         "changed_at",
         "old_unit_price",
         "new_unit_price",
         "old_standard_minutes",
         "new_standard_minutes",
     )
+    fields = readonly_fields
 
     def has_add_permission(self, request, obj=None):
         return False
 
+    @admin.display(description="修改人")
+    def changed_by_name(self, obj):
+        return obj.changed_by.name
 
-class ProcessInline(admin.TabularInline):
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("changed_by", "process__product")
+        )
+
+
+class ProcessInline(TabularInline):
     model = Process
     extra = 0
     can_delete = False
@@ -77,14 +54,30 @@ class ProcessInline(admin.TabularInline):
 
 
 @admin.register(Employee)
-class EmployeeAdmin(admin.ModelAdmin):
+class EmployeeAdmin(ModelAdmin):
     list_display = ("code", "name", "role", "badge_nfc", "qr_code", "team", "active")
     list_filter = ("role", "active", "team")
     search_fields = ("code", "name", "badge_nfc", "qr_code")
+    autocomplete_fields = ("user", "team")
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        return (
+            queryset
+            if request.user.is_superuser
+            else queryset.exclude(user__is_superuser=True)
+        )
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "user" and not request.user.is_superuser:
+            kwargs["queryset"] = db_field.remote_field.model.objects.filter(
+                is_superuser=False
+            )
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
 
 @admin.register(WorkCenter)
-class WorkCenterAdmin(admin.ModelAdmin):
+class WorkCenterAdmin(ModelAdmin):
     list_display = (
         "code",
         "name",
@@ -97,10 +90,10 @@ class WorkCenterAdmin(admin.ModelAdmin):
 
 
 @admin.register(Team)
-class TeamAdmin(admin.ModelAdmin):
+class TeamAdmin(ModelAdmin):
     list_display = ("name", "work_center", "leader", "has_shift_override")
     list_filter = ("work_center",)
-    search_fields = ("name",)
+    search_fields = ("code", "name")
 
     @admin.display(boolean=True, description="已覆盖班次")
     def has_shift_override(self, obj):
@@ -108,15 +101,15 @@ class TeamAdmin(admin.ModelAdmin):
 
 
 @admin.register(Product)
-class ProductAdmin(admin.ModelAdmin):
+class ProductAdmin(ModelAdmin):
     list_display = ("code", "name")
     search_fields = ("code", "name")
     inlines = [ProcessInline]
 
 
 @admin.register(Process)
-class ProcessAdmin(admin.ModelAdmin):
-    form = ProcessAdminForm
+class ProcessAdmin(ModelAdmin):
+    form = ProcessRateForm
     list_display = (
         "product",
         "sequence",
@@ -125,8 +118,18 @@ class ProcessAdmin(admin.ModelAdmin):
         "standard_minutes",
     )
     list_filter = ("product",)
-    search_fields = ("name", "product__code")
+    search_fields = ("operation_code", "name", "product__code", "product__name")
+    autocomplete_fields = ("product",)
+    list_select_related = ("product",)
     inlines = [ProcessRateHistoryInline]
 
+    def get_readonly_fields(self, request, obj=None):
+        employee = employee_for_user(request.user)
+        if obj and (
+            employee is None or employee.role != Employee.Role.PROCESS_ENGINEER
+        ):
+            return ("unit_price", "standard_minutes")
+        return ()
+
     def save_model(self, request, obj, form, change):
-        obj.save(changed_by=form.cleaned_data.get("changed_by"))
+        obj.save(changed_by=employee_for_user(request.user))

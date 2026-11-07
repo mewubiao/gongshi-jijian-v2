@@ -12,6 +12,15 @@ from reporting.models import WorkSession
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
+def make_login_user(employee):
+    from django.contrib.auth import get_user_model
+
+    user = get_user_model().objects.create_user(f"employee-{employee.pk}")
+    employee.user = user
+    employee.save()
+    return user
+
+
 def at(*parts):
     return datetime(*parts, tzinfo=SHANGHAI)
 

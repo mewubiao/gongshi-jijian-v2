@@ -1,0 +1,8 @@
+{% extends "terminal/base.html" %}{% block title %}员工二维码工牌{% endblock %}
+{% block content %}
+<div class="no-print"><h1>员工二维码工牌</h1><p>二维码代表员工身份，请妥善保管。按姓名、工号或班组查找，使用浏览器打印本页；每页 24 人。</p>
+<p><a href="{% url 'terminal:devices' %}">← 返回终端授权</a></p>
+<form method="get" class="filters" role="search"><div><label for="card-query">姓名／工号／班组</label><input id="card-query" type="search" name="q" value="{{ query }}" maxlength="100"></div><button class="secondary">查询</button><a href="{% url 'terminal:cards' %}">重置</a></form></div>
+<div class="cards">{% for worker in employees %}<article class="employee-card"><h2>{{ worker.name }}</h2><img src="{% url 'terminal:card_qr' worker.pk %}" alt="{{ worker.name }}的员工二维码"><strong>{{ worker.code }}</strong><p>{{ worker.team.name|default:'—' }}</p></article>{% empty %}<p>暂无符合条件的启用车间员工或班组长。</p>{% endfor %}</div>
+<div class="no-print">{% include "workflow/pagination.html" %}</div>
+{% endblock %}

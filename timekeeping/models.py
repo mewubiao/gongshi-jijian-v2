@@ -11,6 +11,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
+from masterdata.access import require_team_leader
 from masterdata.models import Employee, Team
 from masterdata.shifts import effective_shift
 from masterdata.validation import ensure_aware, ensure_two_places
@@ -140,6 +141,7 @@ class AuxiliaryWorkLog(models.Model):
     class Meta:
         verbose_name = "辅助作业记录"
         verbose_name_plural = "辅助作业记录"
+        permissions = [("review_auxiliaryworklog", "审核、修正和驳回辅助工时")]
         ordering = ["-started_at", "-pk"]
         constraints = [
             models.UniqueConstraint(
@@ -227,6 +229,10 @@ class AuxiliaryWorkLog(models.Model):
         ensure_aware(started_at, "started_at")
         if not employee.active:
             raise ValidationError("员工未启用")
+        from reporting.models import employee_in_open_group
+
+        if employee_in_open_group(employee):
+            raise ValidationError("整组任务期间不能同时开始辅助作业，请先登记离开")
         owned, shift_name = classify_shift(started_at, *effective_shift(team=team))
         return cls.objects.create(
             employee=employee,
@@ -274,8 +280,7 @@ class AuxiliaryWorkLog(models.Model):
         self.save()
 
     def approve(self, *, reviewer, at=None):
-        if reviewer.role != Employee.Role.TEAM_LEADER:
-            raise ValidationError("审核由班组长执行")
+        require_team_leader(reviewer, [self.team_id])
         if self.status != self.Status.PENDING_REVIEW:
             raise ValidationError("只有待审核的辅助工时可以通过")
         self.status = self.Status.APPROVED
@@ -284,8 +289,7 @@ class AuxiliaryWorkLog(models.Model):
         self.save()
 
     def reject(self, *, reason, rejected_by, at=None):
-        if rejected_by.role != Employee.Role.TEAM_LEADER:
-            raise ValidationError("驳回由班组长执行")
+        require_team_leader(rejected_by, [self.team_id])
         if self.status != self.Status.PENDING_REVIEW:
             raise ValidationError("只有待审核的辅助工时可以驳回")
         reason = (reason or "").strip()
@@ -301,8 +305,7 @@ class AuxiliaryWorkLog(models.Model):
         self.save(update_fields=["status"])
 
     def correct(self, *, minutes, reason, corrected_by, at=None):
-        if corrected_by.role != Employee.Role.TEAM_LEADER:
-            raise ValidationError("修正由班组长执行")
+        require_team_leader(corrected_by, [self.team_id])
         if self.status != self.Status.PENDING_REVIEW:
             raise ValidationError("只能在待审核时修正")
         return AuxiliaryWorkCorrection.objects.create(
@@ -344,6 +347,7 @@ class AuxiliaryWorkCorrection(models.Model):
         self.reason = (self.reason or "").strip()
         if not self.reason:
             raise ValidationError({"reason": "修正必须填写原因"})
+        require_team_leader(self.corrected_by, [self.work_log.team_id])
         ensure_aware(self.corrected_at, "corrected_at")
         if self.corrected_effective_minutes is not None and (
             self.corrected_effective_minutes < 0
@@ -391,6 +395,7 @@ class AuxiliaryWorkRejection(models.Model):
         self.reason = (self.reason or "").strip()
         if not self.reason:
             raise ValidationError({"reason": "驳回必须填写原因"})
+        require_team_leader(self.rejected_by, [self.work_log.team_id])
         ensure_aware(self.rejected_at, "rejected_at")
 
     def save(self, *args, **kwargs):

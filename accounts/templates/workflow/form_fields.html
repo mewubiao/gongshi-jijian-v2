@@ -1,0 +1,9 @@
+{% if form.non_field_errors %}<div class="error flash" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+{% for hidden in form.hidden_fields %}{{ hidden }}{% if hidden.errors %}<div class="error" role="alert">{{ hidden.errors }}</div>{% endif %}{% endfor %}
+{% for field in form.visible_fields %}
+<div class="field">
+  {% if field.field.widget.input_type == 'checkbox' and not field.field.widget.allow_multiple_selected %}<label class="check-label">{{ field }}<span>{{ field.label }}</span></label>{% else %}{{ field.label_tag }}{{ field }}{% endif %}
+  {% if field.help_text %}<p class="help-text" id="{{ field.auto_id }}_helptext">{{ field.help_text }}</p>{% endif %}
+  {% if field.errors %}<div class="error" role="alert">{{ field.errors }}</div>{% endif %}
+</div>
+{% endfor %}

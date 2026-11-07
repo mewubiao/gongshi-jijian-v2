@@ -1,12 +1,13 @@
 from datetime import time
 from decimal import Decimal
 
+from django.contrib import admin
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
 
 from config.testing import at, make_center, make_employee, make_process, make_product
-from masterdata.admin import ProcessAdminForm
-from masterdata.models import Employee, ProcessRateHistory, Team
+from masterdata.models import Employee, Process, ProcessRateHistory, Team
 
 
 class EmployeeTests(TestCase):
@@ -111,8 +112,15 @@ class ProcessRateHistoryTests(TestCase):
         with self.assertRaises(ValidationError):
             self.process.save(changed_by=self.engineer)
 
-    def test_admin_form_asks_for_the_editor_when_rates_change(self):
-        form = ProcessAdminForm(
+    def test_admin_form_uses_the_logged_in_editor_when_rates_change(self):
+        user = get_user_model().objects.create_user("engineer")
+        self.engineer.user = user
+        self.engineer.save()
+        request = RequestFactory().get("/admin/masterdata/process/")
+        request.user = user
+        process_admin = admin.site._registry[Process]
+        form_class = process_admin.get_form(request, self.process)
+        form = form_class(
             data={
                 "product": self.process.product_id,
                 "operation_code": self.process.operation_code,
@@ -120,24 +128,13 @@ class ProcessRateHistoryTests(TestCase):
                 "name": self.process.name,
                 "unit_price": "9.50",
                 "standard_minutes": "30.00",
-                "changed_by": "",
+                "rate_revision": form_class(instance=self.process)[
+                    "rate_revision"
+                ].value(),
             },
             instance=self.process,
         )
-        self.assertFalse(form.is_valid())
-        self.assertIn("修改人", form.errors.as_text())
-        self.process.refresh_from_db()
-
-        form = ProcessAdminForm(
-            data={
-                "product": self.process.product_id,
-                "operation_code": self.process.operation_code,
-                "sequence": self.process.sequence,
-                "name": "只改名称",
-                "unit_price": "1.25",
-                "standard_minutes": "30.00",
-                "changed_by": "",
-            },
-            instance=self.process,
-        )
+        self.assertNotIn("changed_by", form.fields)
         self.assertTrue(form.is_valid(), form.errors)
+        process_admin.save_model(request, form.save(commit=False), form, change=True)
+        self.assertEqual(ProcessRateHistory.objects.get().changed_by, self.engineer)

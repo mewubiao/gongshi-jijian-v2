@@ -1,8 +1,7 @@
 """开工、暂停、报工，以及审核留痕和整组加入 / 离开。
 
-TODO(终端与审核): 车间终端、并行工时分摊、完工数超出派工时的审核提醒。
-实际工时不进入计薪公式。并行任务的重叠工时在对照标准工时之前平均分摊，
-整组任务不参与并行；这些计算不在本期做。
+终端入口复用这些领域方法。新单人报工冻结并行分摊工时，原始打卡工时保留；
+整组任务不参与并行。实际工时不进入单人计薪公式。
 TODO(计件): 计件工资 = 合格件数 × 报工时冻结的单价。完工数量就是合格件数。
 """
 
@@ -11,9 +10,11 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from dispatch.models import Dispatch
-from masterdata.models import Employee
+from masterdata.access import require_role, require_team_leader
+from masterdata.models import Employee, Process
 from masterdata.shifts import effective_shift
 from masterdata.validation import ensure_aware, ensure_two_places
+from reporting.audit import ReportApprovalReversal
 from reporting.duration import overlap_seconds
 from reporting.locking import assert_month_open
 from reporting.ownership import ownership_date
@@ -29,6 +30,7 @@ _REPORT_IMMUTABLE = (
     "frozen_unit_price",
     "frozen_standard_minutes",
     "original_actual_seconds",
+    "allocated_actual_seconds",
 )
 
 
@@ -49,6 +51,12 @@ def employee_in_open_group(employee):
 
 
 def employee_has_open_work(employee, *, excluding_session=None):
+    from timekeeping.models import AuxiliaryWorkLog
+
+    if AuxiliaryWorkLog.objects.filter(
+        employee=employee, status=AuxiliaryWorkLog.Status.RUNNING
+    ).exists():
+        return True
     sessions = WorkSession.objects.filter(
         ended_at__isnull=True,
         started_by=employee,
@@ -82,6 +90,7 @@ class WorkSession(models.Model):
     )
     started_at = models.DateTimeField("开工时间")
     ended_at = models.DateTimeField("完工时间", null=True, blank=True)
+    ownership_date_snapshot = models.DateField("开工归属日", null=True, blank=True)
 
     class Meta:
         verbose_name = "开工"
@@ -95,7 +104,7 @@ class WorkSession(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.dispatch} @ {self.started_at:%Y-%m-%d %H:%M}"
+        return f"{self.dispatch} @ {timezone.localtime(self.started_at):%Y-%m-%d %H:%M}"
 
     def clean(self):
         ensure_aware(self.started_at, "started_at")
@@ -110,6 +119,8 @@ class WorkSession(models.Model):
                 raise ValidationError("开工时间和派工不能改")
             if old.started_by_id != self.started_by_id:
                 raise ValidationError("开工操作人不能改")
+            if old.ownership_date_snapshot != self.ownership_date_snapshot:
+                raise ValidationError("开工归属日不能改")
             if old.ended_at is not None and old.ended_at != self.ended_at:
                 raise ValidationError("完工时间不能改")
             for report in old.reports.all():
@@ -138,6 +149,14 @@ class WorkSession(models.Model):
         ensure_aware(started_at, "started_at")
         dispatch.validate_roster()
         dispatch.assert_terminal_operator(started_by)
+        if dispatch.reports.filter(
+            status__in=[PieceReport.Status.PENDING, PieceReport.Status.APPROVED]
+        ).exists():
+            raise ValidationError("该任务已有待审核或已通过报工，不能重复开工")
+        latest = dispatch.reports.order_by("-submitted_at", "-pk").first()
+        if latest is not None and latest.status == PieceReport.Status.REJECTED:
+            raise ValidationError("驳回后请修改原报工数量重新提交")
+        owned = ownership_date(started_at, *shift_for(started_by, dispatch.work_order))
         if dispatch.sessions.filter(ended_at__isnull=True).exists():
             raise ValidationError("该派工已有未完工的开工")
         if dispatch.kind == Dispatch.Kind.GROUP:
@@ -146,6 +165,7 @@ class WorkSession(models.Model):
                 started_by=started_by,
                 started_at=started_at,
                 present_employees=present_employees,
+                owned=owned,
             )
         if employee_in_open_group(started_by):
             raise ValidationError("整组任务期间不能同时开别的任务")
@@ -153,10 +173,11 @@ class WorkSession(models.Model):
             dispatch=dispatch,
             started_by=started_by,
             started_at=started_at,
+            ownership_date_snapshot=owned,
         )
 
     @classmethod
-    def _open_group(cls, *, dispatch, started_by, started_at, present_employees):
+    def _open_group(cls, *, dispatch, started_by, started_at, present_employees, owned):
         roster = list(dispatch.members.select_related("employee"))
         if present_employees is None:
             present = [member.employee for member in roster]
@@ -180,6 +201,7 @@ class WorkSession(models.Model):
                 dispatch=dispatch,
                 started_by=started_by,
                 started_at=started_at,
+                ownership_date_snapshot=owned,
             )
             for employee in present:
                 GroupMemberSpan.objects.create(
@@ -247,7 +269,9 @@ class WorkSession(models.Model):
         if latest is not None and latest.status == PieceReport.Status.REJECTED:
             raise ValidationError("驳回后请修改数量重新提交")
         bounds = shift_for(self.started_by, self.dispatch.work_order)
-        ownership = ownership_date(self.started_at, *bounds)
+        ownership = self.ownership_date_snapshot or ownership_date(
+            self.started_at, *bounds
+        )
         assert_month_open(ownership)
         with transaction.atomic():
             for pause in self.pauses.filter(resumed_at__isnull=True):
@@ -258,7 +282,11 @@ class WorkSession(models.Model):
             for span in self.member_spans.all():
                 span.frozen_actual_seconds = span.actual_seconds(end=submitted_at)
                 span.save(update_fields=["frozen_actual_seconds"])
-            process = self.dispatch.process
+            process = Process.objects.select_for_update().get(
+                pk=self.dispatch.process_id
+            )
+            from reporting.allocation import allocated_seconds
+
             return PieceReport.objects.create(
                 dispatch=self.dispatch,
                 work_session=self,
@@ -269,6 +297,9 @@ class WorkSession(models.Model):
                 frozen_unit_price=process.unit_price,
                 frozen_standard_minutes=process.standard_minutes,
                 original_actual_seconds=self.actual_seconds(),
+                allocated_actual_seconds=allocated_seconds(self)
+                if self.dispatch.kind == Dispatch.Kind.SINGLE
+                else None,
                 status=PieceReport.Status.PENDING,
             )
 
@@ -575,6 +606,9 @@ class PieceReport(models.Model):
         choices=Status.choices,
         default=Status.PENDING,
     )
+    allocated_actual_seconds = models.PositiveIntegerField(
+        "冻结分摊工时（秒）", null=True, blank=True
+    )
     withdraw_reason = models.TextField("撤回原因", blank=True, default="")
     withdrawn_at = models.DateTimeField("撤回时间", null=True, blank=True)
     approved_by = models.ForeignKey(
@@ -591,6 +625,10 @@ class PieceReport(models.Model):
     class Meta:
         verbose_name = "报工"
         verbose_name_plural = "报工"
+        permissions = [
+            ("review_piecereport", "审核、修正和驳回报工"),
+            ("reverse_piecereport", "反审核报工"),
+        ]
         indexes = [
             models.Index(
                 fields=["status", "ownership_date"],
@@ -650,8 +688,14 @@ class PieceReport(models.Model):
                 raise ValidationError("撤回必须记下时间")
         if self.status == self.Status.APPROVED and not self.approved_by_id:
             raise ValidationError("审核通过必须记下审核人")
-        if self.approved_by_id and (self.approved_by.role != Employee.Role.TEAM_LEADER):
-            raise ValidationError({"approved_by": "审核由班组长执行"})
+        if self.approved_by_id and (
+            self._state.adding
+            or not PieceReport.objects.filter(
+                pk=self.pk, approved_by_id=self.approved_by_id
+            ).exists()
+        ):
+            if self.approved_by.role != Employee.Role.TEAM_LEADER:
+                raise ValidationError({"approved_by": "审核由班组长执行"})
         if self.previous_id and self.previous.status != self.Status.REJECTED:
             raise ValidationError("只能接在已驳回的报工后面重新提交")
 
@@ -686,8 +730,7 @@ class PieceReport(models.Model):
         self.save()
 
     def reject(self, *, reason, rejected_by, at=None):
-        if rejected_by.role != Employee.Role.TEAM_LEADER:
-            raise ValidationError("驳回由班组长执行")
+        require_team_leader(rejected_by, [self.dispatch.team_id])
         if self.status != self.Status.PENDING:
             raise ValidationError("只有待审核的报工可以驳回")
         reason = (reason or "").strip()
@@ -724,6 +767,7 @@ class PieceReport(models.Model):
             frozen_unit_price=self.frozen_unit_price,
             frozen_standard_minutes=self.frozen_standard_minutes,
             original_actual_seconds=self.original_actual_seconds,
+            allocated_actual_seconds=self.allocated_actual_seconds,
             status=self.Status.PENDING,
         )
 
@@ -737,8 +781,7 @@ class PieceReport(models.Model):
         at=None,
     ):
         """修正值另存，不改原始完工数量和原始实际工时。"""
-        if corrected_by.role != Employee.Role.TEAM_LEADER:
-            raise ValidationError("修正由班组长执行")
+        require_team_leader(corrected_by, [self.dispatch.team_id])
         if self.status != self.Status.PENDING:
             raise ValidationError("只能在审核待审报工时修正")
         return ReportCorrection.objects.create(
@@ -752,8 +795,7 @@ class PieceReport(models.Model):
 
     def approve(self, *, reviewer, at=None):
         """第一期允许班组长审核自己派的、自己报的任务。"""
-        if reviewer.role != Employee.Role.TEAM_LEADER:
-            raise ValidationError("审核由班组长执行")
+        require_team_leader(reviewer, [self.dispatch.team_id])
         if self.status != self.Status.PENDING:
             raise ValidationError("只有待审核的报工可以通过")
         at = at or timezone.now()
@@ -763,13 +805,32 @@ class PieceReport(models.Model):
         self.approved_at = at
         self.save()
 
-    def reverse_approval(self):
-        """锁账前允许反审核。谁有权反审核留给后续权限，这里不另设角色。"""
-        if self.status != self.Status.APPROVED:
-            raise ValidationError("只有已审核通过的报工可以反审核")
-        assert_month_open(self.ownership_date)
-        self.status = self.Status.PENDING
-        self.save(update_fields=["status"])
+    def reverse_approval(self, *, actor, at=None):
+        """系统管理员在未锁账月份反审核；状态和操作留痕一并提交。"""
+        from settlement.models import SettlementPeriod
+
+        require_role(actor, Employee.Role.ADMIN, "反审核仅限启用的系统管理员")
+        at = at or timezone.now()
+        ensure_aware(at, "reversed_at")
+        with transaction.atomic():
+            period, _ = SettlementPeriod.objects.get_or_create(
+                year=self.ownership_date.year, month=self.ownership_date.month
+            )
+            SettlementPeriod.objects.select_for_update().get(pk=period.pk)
+            report = PieceReport.objects.select_for_update().get(pk=self.pk)
+            assert_month_open(report.ownership_date)
+            if report.status != self.Status.APPROVED:
+                raise ValidationError("只有已审核通过的报工可以反审核")
+            report.status = self.Status.PENDING
+            report.save(update_fields=["status"])
+            ReportApprovalReversal.objects.create(
+                piece_report=report,
+                reversed_by=actor,
+                reversed_at=at,
+                approved_by=report.approved_by,
+                approved_at=report.approved_at,
+            )
+        self.refresh_from_db()
 
     def effective_completed_qty(self):
         latest = (
@@ -788,7 +849,11 @@ class PieceReport(models.Model):
             .first()
         )
         if latest is None:
-            return self.original_actual_seconds
+            return (
+                self.allocated_actual_seconds
+                if self.allocated_actual_seconds is not None
+                else self.original_actual_seconds
+            )
         return latest.corrected_actual_seconds
 
 
@@ -843,6 +908,7 @@ class ReportCorrection(models.Model):
         self.reason = (self.reason or "").strip()
         if not self.reason:
             raise ValidationError({"reason": "修正必须填写原因"})
+        require_team_leader(self.corrected_by, [self.piece_report.dispatch.team_id])
         ensure_aware(self.corrected_at, "corrected_at")
         ensure_two_places(self.corrected_qty, "corrected_qty", "修正完工数量")
         if self.corrected_qty is None and self.corrected_actual_seconds is None:
@@ -904,6 +970,7 @@ class ReportRejection(models.Model):
         self.reason = (self.reason or "").strip()
         if not self.reason:
             raise ValidationError({"reason": "驳回必须填写原因"})
+        require_team_leader(self.rejected_by, [self.piece_report.dispatch.team_id])
         ensure_aware(self.rejected_at, "rejected_at")
         if self.rejected_by_id and (self.rejected_by.role != Employee.Role.TEAM_LEADER):
             raise ValidationError({"rejected_by": "驳回由班组长执行"})

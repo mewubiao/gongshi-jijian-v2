@@ -1,0 +1,10 @@
+{% extends "accounts/base.html" %}
+{% block title %}计件月结 · 工时计件{% endblock %}
+{% block content %}<div class="workspace">
+  <section class="page-heading"><div><p class="eyebrow">月度核算</p><h1>计件月结</h1><p class="muted">按归属月份查询已审核报工与辅助工时。</p></div></section>
+  <form method="get" class="filters filter-fields">{% include "workflow/form_fields.html" %}<button class="primary">查看月结</button></form>
+  <div class="table-wrap"><table><thead><tr><th>归属月份</th><th>状态</th><th>最近锁账人</th><th>锁账时间</th></tr></thead><tbody>
+    {% for period in page_obj %}<tr><td><a href="{% url 'settlement:detail' period.year period.month %}">{{ period.year }}-{{ period.month|stringformat:'02d' }}</a></td><td><span class="badge">{{ period.get_status_display }}</span></td><td>{{ period.locked_by.name|default:'—' }}</td><td>{{ period.locked_at|date:'Y-m-d H:i'|default:'—' }}</td></tr>
+    {% empty %}<tr><td colspan="4" class="empty">暂无月结期间，可选择上方月份查询。</td></tr>{% endfor %}
+  </tbody></table></div>{% include "workflow/pagination.html" %}
+</div>{% endblock %}

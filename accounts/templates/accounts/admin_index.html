@@ -1,0 +1,20 @@
+{% extends "admin/index.html" %}
+
+{% block content %}
+  {% for group in sidebar_navigation %}
+    {% if group.key == "business" and group.items %}
+      <section class="mb-6" aria-labelledby="business-entry-title">
+        <h2 id="business-entry-title" class="font-semibold text-lg mb-3 text-font-important-light dark:text-font-important-dark">生产业务</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+          {% for item in group.items %}
+            <a href="{{ item.link }}" class="flex items-center gap-3 px-4 py-3 rounded-default border border-base-200 bg-white hover:text-primary-600 dark:border-base-800 dark:bg-base-900 dark:hover:text-primary-500">
+              <span class="material-symbols-outlined text-primary-600 dark:text-primary-500" aria-hidden="true">{{ item.icon }}</span>
+              <span class="font-medium">{{ item.title }}</span>
+            </a>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+  {% endfor %}
+  {{ block.super }}
+{% endblock %}

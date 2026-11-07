@@ -1,0 +1,9 @@
+{% extends "accounts/base.html" %}
+{% block title %}选择工单 · 工时计件{% endblock %}
+{% block content %}<div class="workspace">
+<a class="back-link" href="{% url 'dispatch:list' %}">← 返回派工管理</a><section class="page-heading"><div><p class="eyebrow">新建派工 · 1 / 2</p><h1>选择工单</h1><p class="muted">选择负责班组所在工作中心的未结工单。</p></div></section>
+<form method="get" class="filters"><label for="order-search">工单／产品</label><input id="order-search" name="q" value="{{ query }}" maxlength="100"><button class="secondary">查询</button><a href="{% url 'dispatch:orders' %}">重置</a></form>
+<div class="table-wrap"><table><thead><tr><th>工单号</th><th>产品</th><th>工作中心</th><th>当前剩余量</th><th>最近同步</th><th>操作</th></tr></thead><tbody>
+{% for order in page_obj %}<tr><td>{{ order.order_no }}</td><td>{{ order.product.code }}<small>{{ order.product.name }}</small></td><td>{{ order.work_center.name }}</td><td class="numeric">{{ order.remaining_qty }} {{ order.unit }}</td><td>{{ order.synced_at|date:'m-d H:i'|default:'—' }}</td><td><a href="{% url 'dispatch:create' order.pk %}">选择并派工 →</a></td></tr>{% empty %}<tr><td colspan="6" class="empty">暂无可派工工单。请核对班组负责关系及工单同步状态。</td></tr>{% endfor %}
+</tbody></table></div>{% include "workflow/pagination.html" %}
+</div>{% endblock %}

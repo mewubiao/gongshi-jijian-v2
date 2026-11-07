@@ -1,0 +1,2 @@
+{% extends "terminal/base.html" %}{% block title %}授权终端{% endblock %}
+{% block content %}<section class="panel camera-panel"><h1>启用这台终端</h1><p class="muted">请管理员登记终端，将一次性激活码输入下方。授权后，员工即可使用工牌或二维码进入。</p><form method="post" class="stack" novalidate>{% csrf_token %}{% include "terminal/errors.html" %}<div class="field">{{ form.code.label_tag }}{{ form.code }}</div><button>激活终端</button></form><p class="help-text">激活码只可使用一次，15 分钟内有效。</p></section>{% endblock %}

@@ -1,4 +1,5 @@
 from django.contrib import admin
+from unfold.admin import ModelAdmin
 
 from erp.models import (
     ErpSourceMapping,
@@ -9,7 +10,7 @@ from erp.models import (
 )
 
 
-class ReadOnlyAdmin(admin.ModelAdmin):
+class ReadOnlyAdmin(ModelAdmin):
     def has_add_permission(self, request):
         return False
 
@@ -139,7 +140,7 @@ class SyncStateAdmin(ReadOnlyAdmin):
 
 
 @admin.register(ErpSourceMapping)
-class ErpSourceMappingAdmin(admin.ModelAdmin):
+class ErpSourceMappingAdmin(ModelAdmin):
     """映射可以改。默认都还没核对。"""
 
     list_display = (

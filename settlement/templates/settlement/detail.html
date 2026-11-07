@@ -1,0 +1,40 @@
+{% extends "accounts/base.html" %}
+{% block title %}{{ period.year }}-{{ period.month|stringformat:'02d' }} 计件月结{% endblock %}
+{% block content %}<div class="workspace">
+  <a class="back-link" href="{% url 'settlement:index' %}">← 选择其他月份</a>
+  <section class="page-heading">
+    <div><p class="eyebrow">月度核算</p><h1>{{ period.year }} 年 {{ period.month }} 月计件月结</h1><p class="muted">按归属日汇总已审核报工。辅助工时只计分钟。</p></div>
+    <span class="badge">{% if locked %}已锁账{% else %}未锁账 · 试算{% endif %}</span>
+  </section>
+  {% if legacy %}<p class="flash warning">此月份在旧版本锁账，暂无计件快照。管理员可按流程解锁、复核后重新锁账生成。</p>{% endif %}
+  {% if blockers or errors %}<section class="flash warning" aria-label="锁账待处理事项"><strong>锁账前请处理</strong><ul>{% for issue in blockers %}<li>{{ issue }}</li>{% endfor %}{% for issue in errors %}<li>{{ issue }}</li>{% endfor %}</ul></section>{% endif %}
+  {% if form_errors %}<div class="flash error" role="alert">{{ form_errors }}</div>{% endif %}
+  <section class="module-grid" aria-label="当月汇总">
+    <article class="module-card"><h2>计件金额</h2><p class="count">{% if legacy or errors %}—{% else %}{{ total_amount|floatformat:2 }}<span>元</span>{% endif %}</p></article>
+    <article class="module-card"><h2>纳入计件结算</h2><p class="count">{% if legacy or errors %}—{% else %}{{ report_count }}<span>条已审核报工</span>{% endif %}</p></article>
+    <article class="module-card"><h2>已审核辅助工时</h2><p class="count">{{ total_minutes|floatformat:-4 }}<span>分钟</span></p></article>
+  </section>
+  <section class="page-heading"><div><h2>员工汇总</h2><p class="muted">{% if event.has_piecework_snapshot %}锁账版本 #{{ event.pk }}{% else %}计件金额按员工汇总。{% endif %}</p></div>
+    {% if locked and not legacy %}<a class="primary" href="{% url 'settlement:export' period.year period.month %}">导出整月 Excel</a>{% endif %}
+  </section>
+  <form method="get" class="filters" role="search"><label for="settlement-q">员工姓名／工号</label><input id="settlement-q" type="search" name="q" value="{{ query }}" maxlength="100"><button class="secondary">查询</button><a href="{% url 'settlement:detail' period.year period.month %}">重置</a></form>
+  <div class="table-wrap"><table><thead><tr><th>工号</th><th>员工</th><th>计件金额（元）</th><th>辅助工时（分钟）</th></tr></thead><tbody>
+  {% for item in summary %}<tr><td>{{ item.code }}</td><td>{{ item.name }}</td><td class="numeric">{% if legacy or errors %}—{% else %}{{ item.amount|floatformat:2 }}{% endif %}</td><td class="numeric">{{ item.minutes|floatformat:-4 }}</td></tr>
+  {% empty %}<tr><td colspan="4" class="empty">暂无符合条件的员工汇总。</td></tr>{% endfor %}
+  </tbody></table></div>
+  <section class="page-heading"><div><h2>计件明细</h2><p class="muted">整组报工的有效量为整组总量，个人金额按在组工时分配。</p></div></section>
+  <div class="table-wrap"><table><thead><tr><th>归属日／报工</th><th>工单／工序</th><th>员工</th><th>有效量</th><th>冻结单价</th><th>在组秒数</th><th>个人金额（元）</th></tr></thead><tbody>
+  {% for entry in page_obj %}<tr><td>{{ entry.ownership_date|date:'Y-m-d' }}<small><a href="{% url 'reporting:detail' entry.report_id %}">#{{ entry.report_id }}</a></small></td><td>{{ entry.order_no }}<small>{{ entry.process_name }}</small></td><td>{{ entry.employee_name }}<small>{{ entry.employee_code }}</small></td><td>{{ entry.quantity|floatformat:2 }}</td><td>{{ entry.unit_price|floatformat:2 }}</td><td>{{ entry.group_seconds|default_if_none:'—' }}</td><td class="numeric">{{ entry.amount|floatformat:2 }}</td></tr>
+  {% empty %}<tr><td colspan="7" class="empty">暂无可显示的计件明细。</td></tr>{% endfor %}
+  </tbody></table></div>{% include "workflow/pagination.html" %}
+  {% if can_lock or can_unlock %}<section class="panel settlement-action"><h2>{% if can_lock %}锁账{% else %}解锁{% endif %}</h2>
+    <form method="post" class="review-form">{% csrf_token %}{{ action_form.revision }}
+      {% if can_lock %}<input type="hidden" name="action" value="lock"><p class="muted">核对整月结果后锁账。锁账将保存快照，并禁止修改该月报工和辅助工时。</p><button class="primary">确认锁账</button>
+      {% else %}<input type="hidden" name="action" value="unlock"><div class="field">{{ action_form.reason.label_tag }}{{ action_form.reason }}</div><p class="muted">解锁后可补审，原计件快照和操作历史保留。</p><button class="danger">确认解锁</button>{% endif %}
+    </form>
+  </section>{% endif %}
+  <section class="panel settlement-action"><h2>最近锁账与解锁记录</h2><ul class="history">
+  {% for item in history %}<li><strong>{{ item.get_action_display }} #{{ item.pk }} · {{ item.actor.name }}</strong><time>{{ item.occurred_at|date:'Y-m-d H:i:s' }}</time>{% if item.reason %}<p>{{ item.reason|linebreaksbr }}</p>{% endif %}{% if item.has_piecework_snapshot %}<p>计件快照已保存</p>{% endif %}</li>
+  {% empty %}<li class="muted">暂无锁账或解锁记录。</li>{% endfor %}
+  </ul></section>
+</div>{% endblock %}

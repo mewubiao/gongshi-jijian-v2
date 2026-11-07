@@ -1,0 +1,11 @@
+{% extends "accounts/base.html" %}
+{% load static %}
+{% block title %}新建派工 · 工时计件{% endblock %}
+{% block scripts %}<script src="{% static 'dispatch/form.js' %}" defer></script>{% endblock %}
+{% block content %}<div class="workspace narrow">
+<a class="back-link" href="{% url 'dispatch:orders' %}">← 重新选择工单</a><section class="page-heading"><div><p class="eyebrow">新建派工 · 2 / 2</p><h1>填写派工任务</h1><p class="muted">单次派工数量不得超过工单当前剩余量。</p></div></section>
+<section class="panel"><dl class="facts"><div><dt>工单</dt><dd>{{ order.order_no }}</dd></div><div><dt>产品</dt><dd>{{ order.product.code }} · {{ order.product.name }}</dd></div><div><dt>工作中心</dt><dd>{{ order.work_center.name }}</dd></div><div><dt>当前剩余量</dt><dd>{{ order.remaining_qty }} {{ order.unit }}</dd></div></dl></section>
+{% if order.status == 'closed' %}<p class="flash error">工单已关闭，不能新派工。已派任务仍可报完。</p>{% endif %}
+{% if not form.fields.process.queryset %}<p class="flash warning">该产品暂无启用工序，请工艺人员先维护工艺路线。</p>{% endif %}
+<form id="dispatch-form" method="post" class="panel review-form" novalidate>{% csrf_token %}{% include "workflow/form_fields.html" %}<p class="help-text">单价将在工人报工提交时冻结。整组名单第一位的尾差归属不随小组长移交改变。</p><button class="primary" type="submit">确认派工</button></form>
+</div>{% endblock %}

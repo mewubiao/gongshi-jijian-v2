@@ -1,0 +1,25 @@
+{% extends "accounts/base.html" %}
+{% block title %}工作台 · 工时计件{% endblock %}
+{% block content %}
+<div class="workspace">
+  <section class="welcome">
+    <div><p class="eyebrow">工作空间</p><h1>{% if employee %}{{ employee.name }}{% else %}{{ user.username }}{% endif %}，欢迎回来</h1><p class="muted">在这里查看你有权访问的业务数据。</p></div>
+    {% if employee %}<span class="badge">{{ employee.get_role_display }}</span>{% else %}<span class="badge">技术超级用户</span>{% endif %}
+  </section>
+  {% if teams %}<section class="scope-note"><strong>负责班组</strong>{% for team in teams %}<span>{{ team.name }}</span>{% endfor %}</section>{% endif %}
+  {% if employee.role == 'team_leader' and not teams %}<p class="scope-note">尚未分配负责班组，请联系系统管理员设置班组长。</p>{% endif %}
+  {% if employee.role == 'worker' %}<p class="scope-note">可查询本人派工、报工和辅助工时。开完工请使用管理员已授权的车间终端，报工查询范围为本月和上月。</p>{% endif %}
+  {% if employee.role == 'settlement' %}<p class="scope-note">可查询报工、辅助工时与计件月结，导出已锁账的计件快照。</p>{% endif %}
+  {% if shortcuts %}<section class="action-row quick-actions" aria-label="常用操作">{% for action in shortcuts %}<a class="secondary" href="{{ action.url }}">{{ action.label }}</a>{% endfor %}</section>{% endif %}
+  <section class="module-grid" aria-label="业务数据">
+    {% for module in modules %}
+    <article class="module-card">
+      <h2>{{ module.name }}</h2><p class="count">{{ module.count }}<span>条记录</span></p>
+      {% if module.pending != None %}<p><a href="{{ module.pending_url }}">待审核 {{ module.pending }} 条 →</a></p>{% endif %}
+      {% if module.url %}<a href="{{ module.url }}">查看记录 <span aria-hidden="true">→</span></a>{% else %}<p class="muted">本人范围内的记录</p>{% endif %}
+    </article>
+    {% empty %}<p class="scope-note">当前暂无可访问的业务模块，请联系系统管理员核对员工角色。</p>{% endfor %}
+  </section>
+  {% if can_use_admin %}<section class="management"><div><h2>业务管理</h2><p class="muted">按角色查看记录或维护档案。</p></div><a class="secondary" href="{% url 'admin:index' %}">进入管理后台</a></section>{% endif %}
+</div>
+{% endblock %}

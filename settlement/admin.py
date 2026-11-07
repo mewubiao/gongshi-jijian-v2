@@ -1,9 +1,10 @@
 from django.contrib import admin
+from unfold.admin import ModelAdmin, TabularInline
 
 from settlement.models import SettlementLockEvent, SettlementPeriod
 
 
-class SettlementLockEventInline(admin.TabularInline):
+class SettlementLockEventInline(TabularInline):
     model = SettlementLockEvent
     extra = 0
     can_delete = False
@@ -14,7 +15,7 @@ class SettlementLockEventInline(admin.TabularInline):
 
 
 @admin.register(SettlementPeriod)
-class SettlementPeriodAdmin(admin.ModelAdmin):
+class SettlementPeriodAdmin(ModelAdmin):
     list_display = ("year", "month", "status", "locked_by", "locked_at")
     list_filter = ("status",)
     inlines = [SettlementLockEventInline]

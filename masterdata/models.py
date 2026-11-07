@@ -9,12 +9,13 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 
+from masterdata.access import require_role
 from masterdata.shifts import validate_shift_pair
 from masterdata.validation import ensure_aware, ensure_two_places
 
 
 class Employee(models.Model):
-    """员工主数据。终端认人走工牌 NFC 或二维码，不在本期实现登录。"""
+    """员工主数据。管理端账号可选关联，终端仍走工牌 NFC 或二维码。"""
 
     class Role(models.TextChoices):
         WORKER = "worker", "车间工人"
@@ -49,7 +50,7 @@ class Employee(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="employee",
-        help_text="可选。以后登录对应到员工；本期终端不使用它认人。",
+        help_text="管理端登录须关联启用账号；车间终端使用工牌或二维码认人。",
     )
     active = models.BooleanField("启用", default=True, db_index=True)
 
@@ -280,24 +281,27 @@ class Process(models.Model):
             raise ValidationError({"standard_minutes": "标准工时不能为负"})
 
     def save(self, *args, changed_by=None, changed_at=None, **kwargs):
-        previous = None
-        rate_changed = False
-        when = None
-        if self.pk:
-            previous = Process.objects.get(pk=self.pk)
-            rate_changed = (
-                previous.unit_price != self.unit_price
-                or previous.standard_minutes != self.standard_minutes
-            )
-        if rate_changed:
-            if changed_by is None:
-                raise ValidationError("修改单价或标准工时必须记录修改人")
-            if changed_by.role != Employee.Role.PROCESS_ENGINEER:
-                raise ValidationError("单价和标准工时由工艺人员修改")
-            when = changed_at or timezone.now()
-            ensure_aware(when, "changed_at")
-        self.full_clean()
         with transaction.atomic():
+            previous = None
+            rate_changed = False
+            when = None
+            if self.pk:
+                previous = Process.objects.select_for_update().get(pk=self.pk)
+                rate_changed = (
+                    previous.unit_price != self.unit_price
+                    or previous.standard_minutes != self.standard_minutes
+                )
+            if rate_changed:
+                if changed_by is None:
+                    raise ValidationError("修改单价或标准工时必须记录修改人")
+                require_role(
+                    changed_by,
+                    Employee.Role.PROCESS_ENGINEER,
+                    "单价和标准工时由启用的工艺人员修改",
+                )
+                when = changed_at or timezone.now()
+                ensure_aware(when, "changed_at")
+            self.full_clean()
             super().save(*args, **kwargs)
             if rate_changed:
                 ProcessRateHistory.objects.create(
@@ -346,7 +350,7 @@ class ProcessRateHistory(models.Model):
         ordering = ["-changed_at", "-pk"]
 
     def __str__(self):
-        return f"{self.process} @ {self.changed_at:%Y-%m-%d %H:%M}"
+        return f"{self.process} @ {timezone.localtime(self.changed_at):%Y-%m-%d %H:%M}"
 
     def clean(self):
         ensure_aware(self.changed_at, "changed_at")

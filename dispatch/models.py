@@ -11,6 +11,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from erp.models import WorkOrder
+from masterdata.access import require_team_leader
 from masterdata.models import Employee, Process, Team
 from masterdata.validation import ensure_aware, ensure_two_places
 
@@ -61,6 +62,9 @@ class Dispatch(models.Model):
     )
     planned_date = models.DateField("计划日期", null=True, blank=True)
     dispatch_note = models.CharField("派工备注", max_length=500, blank=True, default="")
+    submission_key = models.UUIDField(
+        "提交标识", null=True, blank=True, unique=True, editable=False
+    )
 
     class Meta:
         verbose_name = "派工"
@@ -84,7 +88,11 @@ class Dispatch(models.Model):
         ensure_aware(self.assigned_at, "assigned_at")
         if self.quantity is not None and self.quantity <= 0:
             raise ValidationError({"quantity": "派工数量必须大于 0"})
-        if self.assigned_by_id and (self.assigned_by.role != Employee.Role.TEAM_LEADER):
+        if (
+            self._state.adding
+            and self.assigned_by_id
+            and (self.assigned_by.role != Employee.Role.TEAM_LEADER)
+        ):
             raise ValidationError({"assigned_by": "派工由班组长执行"})
         if self.process_id and self.work_order_id:
             if self.process.product_id != self.work_order.product_id:
@@ -97,6 +105,8 @@ class Dispatch(models.Model):
         if adding and self.work_order_id:
             if self.work_order.status == WorkOrder.Status.CLOSED:
                 raise ValidationError("工单已关闭，不能再新派工")
+        if adding:
+            require_team_leader(self.assigned_by, [self.team_id])
         if self.pk and not adding:
             old = Dispatch.objects.get(pk=self.pk)
             if (
@@ -177,6 +187,9 @@ class Dispatch(models.Model):
     ):
         assigned_at = assigned_at or timezone.now()
         with transaction.atomic():
+            work_order = WorkOrder.objects.select_for_update().get(pk=work_order.pk)
+            assignee = Employee.objects.select_for_update().get(pk=assignee.pk)
+            require_team_leader(assigned_by, [assignee.team_id])
             dispatch = cls(
                 work_order=work_order,
                 process=process,
@@ -214,6 +227,17 @@ class Dispatch(models.Model):
             raise ValidationError("组员不能重复")
         assigned_at = assigned_at or timezone.now()
         with transaction.atomic():
+            work_order = WorkOrder.objects.select_for_update().get(pk=work_order.pk)
+            current_members = {
+                employee.pk: employee
+                for employee in Employee.objects.select_for_update()
+                .filter(pk__in=[member.pk for member in members])
+                .order_by("pk")
+            }
+            if len(current_members) != len(members):
+                raise ValidationError("组员不存在")
+            members = [current_members[member.pk] for member in members]
+            require_team_leader(assigned_by, [employee.team_id for employee in members])
             dispatch = cls(
                 work_order=work_order,
                 process=process,

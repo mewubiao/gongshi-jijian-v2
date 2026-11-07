@@ -1,17 +1,12 @@
-"""月结期间。锁账时按员工汇总已审核辅助工时，不算这笔金额。
+"""月结期间、锁账留痕、计件金额快照和辅助工时汇总。"""
 
-TODO(月结): 按归属月份汇总已审核通过的报工。
-金额 = 合格件数 × 报工冻结单价，保留到分。
-整组先算整组金额，再按各组员冻结的实际工时占比分配，
-尾差给派工时列出的第一位（DispatchMember.sequence = 1）。
-第一期不含扣款、补贴。导出 Excel 和页面查询以后再做。
-有未审核（待审核）报工时不能锁账；已撤回、已驳回不挡住锁账。
-"""
+from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils import timezone
 
+from masterdata.access import require_role
 from masterdata.models import Employee
 from masterdata.validation import ensure_aware
 
@@ -42,6 +37,10 @@ class SettlementPeriod(models.Model):
     class Meta:
         verbose_name = "月结期间"
         verbose_name_plural = "月结期间"
+        permissions = [
+            ("lock_settlementperiod", "月结锁账"),
+            ("unlock_settlementperiod", "月结解锁"),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["year", "month"],
@@ -80,57 +79,55 @@ class SettlementPeriod(models.Model):
         self.full_clean()
         super().save(*args, **kwargs)
 
-    def lock(self, actor, *, at=None):
+    def lock(self, actor, *, at=None, expected_revision=None):
         self._require_admin(actor, "锁账由系统管理员执行")
         at = at or timezone.now()
         ensure_aware(at, "locked_at")
-        from reporting.models import PieceReport
+        from settlement.checks import assert_ready_to_lock
+        from settlement.hours import approved_auxiliary_minutes
+        from settlement.piecework import calculate_piecework
+        from settlement.revisions import check_revision
 
         with transaction.atomic():
             period = SettlementPeriod.objects.select_for_update().get(pk=self.pk)
             if period.status == self.Status.LOCKED:
                 raise ValidationError("该月已经锁账")
-            pending = PieceReport.objects.filter(
-                status=PieceReport.Status.PENDING,
-                ownership_date__year=period.year,
-                ownership_date__month=period.month,
-            ).exists()
-            if pending:
-                raise ValidationError("该月还有未审核报工，不能锁账")
-            from timekeeping.models import AuxiliaryWorkLog
-
-            pending_auxiliary = AuxiliaryWorkLog.objects.filter(
-                status=AuxiliaryWorkLog.Status.PENDING_REVIEW,
-                ownership_date__year=period.year,
-                ownership_date__month=period.month,
-            ).exists()
-            if pending_auxiliary:
-                raise ValidationError("该月还有未审核辅助工时，不能锁账")
+            assert_ready_to_lock(period.year, period.month)
+            entries = calculate_piecework(period.year, period.month)
+            minutes = approved_auxiliary_minutes(period.year, period.month)
+            check_revision(period, expected_revision, entries, minutes)
             period.status = self.Status.LOCKED
             period.locked_by = actor
             period.locked_at = at
             period.save(allow_status_change=True)
-            period.write_auxiliary_hour_summaries()
-            SettlementLockEvent.objects.create(
+            period.write_auxiliary_hour_summaries(minutes)
+            event = SettlementLockEvent.objects.create(
                 period=period,
                 action=SettlementLockEvent.Action.LOCK,
                 actor=actor,
                 occurred_at=at,
                 reason="",
+                has_piecework_snapshot=True,
             )
+            for entry in entries:
+                entry.lock_event = event
+            PieceworkAllocation.objects.bulk_create(entries, batch_size=500)
         self.refresh_from_db()
 
-    def unlock(self, actor, reason, *, at=None):
+    def unlock(self, actor, reason, *, at=None, expected_revision=None):
         self._require_admin(actor, "解锁由系统管理员执行")
         reason = (reason or "").strip()
         if not reason:
             raise ValidationError("解锁必须填写原因")
         at = at or timezone.now()
         ensure_aware(at, "occurred_at")
+        from settlement.revisions import check_revision
+
         with transaction.atomic():
             period = SettlementPeriod.objects.select_for_update().get(pk=self.pk)
             if period.status != self.Status.LOCKED:
                 raise ValidationError("该月没有锁账")
+            check_revision(period, expected_revision)
             period.status = self.Status.OPEN
             period.locked_by = None
             period.locked_at = None
@@ -147,22 +144,22 @@ class SettlementPeriod(models.Model):
 
     @staticmethod
     def _require_admin(actor, message):
-        if actor is None or actor.role != Employee.Role.ADMIN:
-            raise ValidationError(message)
+        require_role(actor, Employee.Role.ADMIN, message)
 
-    def write_auxiliary_hour_summaries(self):
+    def write_auxiliary_hour_summaries(self, totals):
         """按员工重写本月已审核辅助工时。不写单价和金额。"""
-        from settlement.hours import approved_auxiliary_minutes
-
         self.auxiliary_hour_summaries.all().delete()
-        for employee_id, minutes in approved_auxiliary_minutes(
-            self.year, self.month
-        ).items():
-            AuxiliaryHourSummary.objects.create(
-                period=self,
-                employee_id=employee_id,
-                total_minutes=minutes,
-            )
+        AuxiliaryHourSummary.objects.bulk_create(
+            [
+                AuxiliaryHourSummary(
+                    period=self,
+                    employee_id=employee_id,
+                    total_minutes=minutes,
+                )
+                for employee_id, minutes in totals.items()
+            ],
+            batch_size=500,
+        )
 
 
 class SettlementLockEvent(models.Model):
@@ -187,6 +184,7 @@ class SettlementLockEvent(models.Model):
     )
     occurred_at = models.DateTimeField("操作时间")
     reason = models.TextField("原因", blank=True, default="")
+    has_piecework_snapshot = models.BooleanField("已生成计件快照", default=False)
 
     class Meta:
         verbose_name = "锁账留痕"
@@ -274,3 +272,45 @@ class AuxiliaryHourSummary(models.Model):
 
     def __str__(self):
         return f"{self.period} {self.employee} {self.total_minutes}"
+
+
+class PieceworkAllocation(models.Model):
+    """一次锁账下，一份报工分给一名员工的金额和计算依据。"""
+
+    lock_event = models.ForeignKey(
+        SettlementLockEvent, on_delete=models.PROTECT, related_name="piecework_entries"
+    )
+    report = models.ForeignKey("reporting.PieceReport", on_delete=models.PROTECT)
+    employee = models.ForeignKey(Employee, on_delete=models.PROTECT)
+    employee_code = models.CharField(max_length=32)
+    employee_name = models.CharField(max_length=100)
+    ownership_date = models.DateField()
+    order_no = models.CharField(max_length=64)
+    process_name = models.CharField(max_length=100)
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
+    group_seconds = models.PositiveBigIntegerField(null=True)
+    amount_cents = models.PositiveBigIntegerField()
+
+    class Meta:
+        verbose_name = "计件结算明细"
+        verbose_name_plural = "计件结算明细"
+        ordering = ("ownership_date", "report_id", "employee_code", "employee_id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["lock_event", "report", "employee"],
+                name="unique_piecework_share",
+            ),
+        ]
+
+    @property
+    def amount(self):
+        return Decimal(self.amount_cents).scaleb(-2)
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError("计件结算快照不能修改")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("计件结算快照不能删除")

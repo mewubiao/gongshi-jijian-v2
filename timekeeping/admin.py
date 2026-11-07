@@ -1,5 +1,7 @@
 from django.contrib import admin
+from unfold.admin import ModelAdmin, TabularInline
 
+from accounts.admin import ScopedAdminMixin
 from timekeeping.models import (
     AuxiliaryWorkCategory,
     AuxiliaryWorkCorrection,
@@ -8,7 +10,7 @@ from timekeeping.models import (
 )
 
 
-class AuxiliaryCorrectionInline(admin.TabularInline):
+class AuxiliaryCorrectionInline(TabularInline):
     model = AuxiliaryWorkCorrection
     extra = 0
     can_delete = False
@@ -23,7 +25,7 @@ class AuxiliaryCorrectionInline(admin.TabularInline):
         return False
 
 
-class AuxiliaryRejectionInline(admin.TabularInline):
+class AuxiliaryRejectionInline(TabularInline):
     model = AuxiliaryWorkRejection
     extra = 0
     can_delete = False
@@ -34,13 +36,13 @@ class AuxiliaryRejectionInline(admin.TabularInline):
 
 
 @admin.register(AuxiliaryWorkCategory)
-class AuxiliaryWorkCategoryAdmin(admin.ModelAdmin):
+class AuxiliaryWorkCategoryAdmin(ModelAdmin):
     list_display = ("code", "name", "active", "note_required")
     search_fields = ("code", "name")
 
 
 @admin.register(AuxiliaryWorkLog)
-class AuxiliaryWorkLogAdmin(admin.ModelAdmin):
+class AuxiliaryWorkLogAdmin(ScopedAdminMixin, ModelAdmin):
     list_display = (
         "employee",
         "category",

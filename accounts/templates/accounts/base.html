@@ -1,0 +1,27 @@
+{% load static office_navigation %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}工时计件{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'accounts/app.css' %}">
+  {% block scripts %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{% url 'dashboard' %}"><span class="brand-mark">时</span>工时计件<span class="version">v2</span></a>
+    {% if user.is_authenticated %}
+    {% office_navigation request as navigation %}
+    <nav aria-label="业务与账号导航">
+      {% for item in navigation %}<a href="{{ item.link }}"{% if item.active %} aria-current="page"{% endif %}>{{ item.title }}</a>{% endfor %}
+      <span class="user-name">{% if employee %}{{ employee.name }}{% else %}{{ user.username }}{% endif %}</span>
+      <a href="{% url 'accounts:password_change' %}">修改密码</a>
+      <form action="{% url 'accounts:logout' %}" method="post">{% csrf_token %}<button class="text-button" type="submit">退出登录</button></form>
+    </nav>
+    {% endif %}
+  </header>
+  <main>{% if messages %}<div class="workspace" aria-live="polite">{% for message in messages %}<div class="flash notice">{{ message }}</div>{% endfor %}</div>{% endif %}{% block content %}{% endblock %}</main>
+  <footer>工时计件 · 生产协作与工时核算</footer>
+</body>
+</html>

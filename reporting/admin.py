@@ -1,16 +1,19 @@
 from django.contrib import admin
+from unfold.admin import ModelAdmin, TabularInline
 
+from accounts.admin import ScopedAdminMixin
 from reporting.models import (
     GroupMemberSpan,
     PauseInterval,
     PieceReport,
+    ReportApprovalReversal,
     ReportCorrection,
     ReportRejection,
     WorkSession,
 )
 
 
-class ReadOnlyAdmin(admin.ModelAdmin):
+class ReadOnlyAdmin(ModelAdmin):
     def has_add_permission(self, request):
         return False
 
@@ -21,7 +24,7 @@ class ReadOnlyAdmin(admin.ModelAdmin):
         return False
 
 
-class PauseInline(admin.TabularInline):
+class PauseInline(TabularInline):
     model = PauseInterval
     extra = 0
     can_delete = False
@@ -31,7 +34,7 @@ class PauseInline(admin.TabularInline):
         return False
 
 
-class GroupMemberSpanInline(admin.TabularInline):
+class GroupMemberSpanInline(TabularInline):
     model = GroupMemberSpan
     extra = 0
     can_delete = False
@@ -47,7 +50,7 @@ class GroupMemberSpanInline(admin.TabularInline):
         return False
 
 
-class ReportCorrectionInline(admin.TabularInline):
+class ReportCorrectionInline(TabularInline):
     model = ReportCorrection
     extra = 0
     can_delete = False
@@ -63,7 +66,7 @@ class ReportCorrectionInline(admin.TabularInline):
         return False
 
 
-class ReportRejectionInline(admin.TabularInline):
+class ReportRejectionInline(TabularInline):
     model = ReportRejection
     extra = 0
     can_delete = False
@@ -73,14 +76,24 @@ class ReportRejectionInline(admin.TabularInline):
         return False
 
 
+class ReportApprovalReversalInline(TabularInline):
+    model = ReportApprovalReversal
+    extra = 0
+    can_delete = False
+    readonly_fields = ("reversed_by", "reversed_at", "approved_by", "approved_at")
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(WorkSession)
-class WorkSessionAdmin(ReadOnlyAdmin):
+class WorkSessionAdmin(ScopedAdminMixin, ReadOnlyAdmin):
     list_display = ("dispatch", "started_by", "started_at", "ended_at")
     inlines = [PauseInline, GroupMemberSpanInline]
 
 
 @admin.register(PieceReport)
-class PieceReportAdmin(ReadOnlyAdmin):
+class PieceReportAdmin(ScopedAdminMixin, ReadOnlyAdmin):
     list_display = (
         "dispatch",
         "ownership_date",
@@ -90,4 +103,8 @@ class PieceReportAdmin(ReadOnlyAdmin):
         "reported_by",
     )
     list_filter = ("status",)
-    inlines = [ReportCorrectionInline, ReportRejectionInline]
+    inlines = [
+        ReportCorrectionInline,
+        ReportRejectionInline,
+        ReportApprovalReversalInline,
+    ]

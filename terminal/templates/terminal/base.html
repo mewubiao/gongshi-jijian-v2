@@ -1,0 +1,6 @@
+{% load static %}<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{% block title %}车间报工{% endblock %} · 工时计件</title><link rel="stylesheet" href="{% static 'terminal/terminal.css' %}">{% block scripts %}{% endblock %}{% if employee %}<script src="{% static 'terminal/idle.js' %}" defer></script>{% endif %}</head>
+<body>{% if employee %}<div id="terminal-private" data-sequence="{{ device.login_sequence }}">{% endif %}
+<header class="terminal-header"><strong>工时计件 · 车间报工</strong>{% if employee %}<div class="identity"><span>{{ employee.name }} · {{ employee.code }}</span><span><b id="idle-counter">15</b> 秒无操作退出</span><form action="{% url 'terminal:logout' %}" method="post">{% csrf_token %}<input name="sequence" type="hidden" value="{{ device.login_sequence }}"><button class="secondary" type="submit">退出／换人</button></form></div>{% else %}<span>{{ device.name|default:'固定终端' }}</span>{% endif %}</header>
+{% if employee %}<nav class="terminal-nav"><a href="{% url 'terminal:home' %}">我的任务</a><a href="{% url 'terminal:reports' %}">本月／上月报工</a><a href="{% url 'terminal:auxiliary' %}">辅助工时</a></nav>{% endif %}
+<main><div id="network-state" class="warning" aria-live="polite"></div>{% block content %}{% endblock %}</main>{% if employee %}</div>{% endif %}
+</body></html>

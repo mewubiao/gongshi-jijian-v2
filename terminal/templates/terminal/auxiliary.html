@@ -1,0 +1,24 @@
+{% extends "terminal/base.html" %}{% block title %}辅助工时{% endblock %}
+{% block content %}
+<h1>我的辅助工时</h1>{% include "terminal/errors.html" %}
+<section class="panel">
+{% if running %}
+  <h2>进行中：{{ running.category_name_snapshot }}</h2><p>开始 {{ running.started_at|date:'m-d H:i:s' }} · {{ running.work_note }}</p>
+  <form method="post">{% csrf_token %}<input type="hidden" name="ticket" value="{{ ticket }}"><input type="hidden" name="action" value="submit"><input type="hidden" name="log_id" value="{{ running.pk }}">
+    <label for="aux-submit-note">作业说明{% if running.category.note_required %}（必填）{% endif %}</label>
+    <textarea id="aux-submit-note" name="note" maxlength="500"{% if running.category.note_required %} required{% endif %}>{{ submit_note }}</textarea><button data-online>结束并提交审核</button>
+  </form>
+{% else %}
+  <h2>开始辅助作业</h2><form method="post">{% csrf_token %}<input type="hidden" name="ticket" value="{{ ticket }}"><input type="hidden" name="action" value="start">
+    <label for="aux-category">作业类别</label><select id="aux-category" name="category" required><option value="">请选择</option>{% for category in categories %}<option value="{{ category.pk }}"{% if form.category.value|stringformat:'s' == category.pk|stringformat:'s' %} selected{% endif %}>{{ category.name }}{% if category.note_required %}（须填写说明）{% endif %}</option>{% endfor %}</select>
+    <label for="aux-note">作业说明</label><textarea id="aux-note" name="note" maxlength="500">{{ form.note.value|default_if_none:'' }}</textarea><button data-online>开始计时</button>
+  </form>
+{% endif %}
+</section>
+<section class="panel"><h2>辅助工时记录</h2><div class="table-wrap"><table class="responsive-records"><thead><tr><th>归属日／类别</th><th>状态与说明</th><th>当前有效分钟</th><th>操作</th></tr></thead><tbody>
+{% for log in logs %}<tr><td data-label="归属日／类别">{{ log.ownership_date|date:'m-d' }}<br>{{ log.category_name_snapshot }}</td><td data-label="状态与说明">{{ log.get_status_display }}{% for rejection in log.rejections.all %}<p class="help-text">驳回：{{ rejection.reason }}</p>{% endfor %}</td><td data-label="当前有效分钟">{% if log.status == 'RUNNING' %}计时中{% else %}{{ log.review_minutes }}{% if log.review_minutes != log.original_effective_minutes %}<br><small>原始 {{ log.original_effective_minutes }}</small>{% endif %}{% endif %}</td><td class="record-action">
+{% if log.status == 'PENDING_REVIEW' %}<form method="post">{% csrf_token %}<input type="hidden" name="ticket" value="{{ ticket }}"><input type="hidden" name="action" value="withdraw"><input type="hidden" name="log_id" value="{{ log.pk }}"><input name="reason" aria-label="撤回原因" maxlength="2000" required placeholder="撤回原因" value="{% if log.pk|stringformat:'s' == submitted_log_id %}{{ form.reason.value|default_if_none:'' }}{% endif %}"><button class="secondary" data-online>撤回</button></form>{% elif log.status == 'REJECTED' %}<small>请联系班组长核对处理</small>{% endif %}</td></tr>
+{% empty %}<tr><td colspan="4">暂无辅助工时记录。</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% include "workflow/pagination.html" %}
+{% endblock %}
