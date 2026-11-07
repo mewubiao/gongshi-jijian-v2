@@ -1,0 +1,23 @@
+@import "tailwindcss";
+@source "./*.html";
+@plugin "daisyui" { themes: light --default; exclude: join; }
+@theme { --font-sans: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif; }
+body { background: #f4f6fa; color: #172238; }
+.sidebar { background: #142338; color: #a9bbd0; width: 232px; position: fixed; inset: 0 auto 0 0; padding: 32px 18px; }
+.sidebar a { display: block; padding: 13px 18px; margin: 5px 0; border-radius: 8px; }
+.sidebar a:hover, .sidebar a.active { background: #25435f; color: white; }
+.brand { color: white; font-size: 23px; font-weight: 700; letter-spacing: 2px; }
+.content { margin-left: 232px; padding: 32px 40px; max-width: 1680px; }
+.card { background: white; border: 1px solid #e4e9f0; box-shadow: 0 2px 5px #14233804; }
+.btn-primary { background: #096b63; border-color: #096b63; color: white; }
+.btn { text-transform: none; }
+.table th { color: #69788a; background: #f8fafc; }
+.input, .select, .textarea { background: white; width: 100%; }
+.field { display: block; color: #526174; font-size: 13px; margin-bottom: 12px; }
+.field input, .field select { margin-top: 6px; }
+.muted { color: #748196; }
+.terminal .btn { min-height: 60px; font-size: 18px; }
+.terminal .card { border-radius: 16px; }
+@media(max-width: 850px) { .sidebar { position: static; width: auto; padding: 16px; } .sidebar nav { display: flex; flex-wrap: wrap; } .sidebar a { padding: 8px; } .content { margin: 0; padding: 20px; } }
+
+.alert-success { background: #e6f5ee; color: #195b42; border-color: #c7e7d8; }

@@ -1,0 +1,2 @@
+external_id,product_code,center_code,quantity,status,source
+FILE-DEMO-003,P001,WC01,100,open,FILE 演示导入
