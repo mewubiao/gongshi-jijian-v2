@@ -100,3 +100,8 @@ CREATE TABLE IF NOT EXISTS trims (
 );
 
 ALTER TABLE allocations ADD COLUMN IF NOT EXISTS algorithm text NOT NULL DEFAULT 'interval-v1';
+
+-- Existing rows retain interval-v1, including all pending and approved history.
+-- New application reports always supply an explicit version. Safe to rerun.
+ALTER TABLE batches ADD COLUMN IF NOT EXISTS algorithm text NOT NULL DEFAULT 'interval-v1'
+ CHECK(algorithm IN ('interval-v1','interval-v2'));

@@ -60,7 +60,7 @@ func TestParallelFullPartialPause(t *testing.T) {
 	}{
 		{"完整重叠20与40", 0, 60, 60, 20 * minute, 40 * minute, false},
 		{"部分重叠40与50", 30, 60, 90, 40 * minute, 50 * minute, false},
-		{"暂停不计且总时间守恒", 0, 60, 60, 800000000, 2800000000, true},
+		{"暂停不计且总时间守恒", 0, 60, 60, 1028571428, 2571428572, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := fixture()
@@ -87,6 +87,36 @@ func TestParallelFullPartialPause(t *testing.T) {
 				t.Fatal("已审结果被重算")
 			}
 		})
+	}
+}
+
+// Same uniform production facts, different report checkpoints: each operation
+// produces 20 units over 60 minutes, so both must receive 30 minutes.
+func TestEquivalentBatchCuts(t *testing.T) {
+	for _, cuts := range [][]int64{{60}, {30, 60}, {15, 30, 45, 60}} {
+		s := fixture()
+		s.Versions[0].Standard = s.Versions[1].Standard
+		move(t, s, "start", "a", 0)
+		move(t, s, "start", "b", 0)
+		for _, at := range cuts {
+			if at == 60 {
+				complete(t, s, "a", Quantity(20*Scale/int64(len(cuts))), at*minute)
+			} else {
+				must(t, s, "report", url.Values{"id": {"a"}, "good": {Quantity(20 * Scale / int64(len(cuts)))}}, at*minute)
+			}
+		}
+		complete(t, s, "b", "20", 60*minute)
+		var a, b int64
+		for _, x := range s.Allocations {
+			if s.Batch(x.BatchID).DispatchID == "a" {
+				a += x.Accounted
+			} else {
+				b += x.Accounted
+			}
+		}
+		if a != 30*minute || a+b != 60*minute {
+			t.Fatalf("cuts=%v A=%d B=%d; want 30/30 conserved", cuts, a, b)
+		}
 	}
 }
 func TestCollaborationMembershipAndConservation(t *testing.T) {
@@ -258,5 +288,155 @@ func TestTimeCorrectionUnionPreservesRawAndQuantities(t *testing.T) {
 	move(t, s, "approve", batch, 62*minute)
 	if _, err := s.Apply(boss, "trim", url.Values{"id": {batch}, "employee_id": {"e1"}, "start": {local(30)}, "end": {local(35)}, "reason": {"should reject"}}, base+63*minute); err == nil {
 		t.Fatal("已审时间可修改")
+	}
+}
+
+func TestLegacyVersionUpgradeAndApprovedImmutability(t *testing.T) {
+	s := fixture()
+	s.Versions[0].Standard = s.Versions[1].Standard
+	move(t, s, "start", "a", 0)
+	move(t, s, "start", "b", 0)
+	a1 := must(t, s, "report", url.Values{"id": {"a"}, "good": {"10"}}, 30*minute)
+	a2 := complete(t, s, "a", "10", 60*minute)
+	b := complete(t, s, "b", "20", 60*minute)
+	// Reconstruct a pre-upgrade pending group. Empty version is legacy too.
+	for i := range s.Batches {
+		s.Batches[i].Algorithm = ""
+	}
+	s.Recalculate(base + 60*minute)
+	if allocation(s, a1, "e1").Accounted+allocation(s, a2, "e1").Accounted != 20*minute || allocation(s, b, "e1").Accounted != 40*minute {
+		t.Fatal("legacy replay changed")
+	}
+	s.Batch(b).Algorithm = AlgorithmVersion
+	s.Recalculate(base + 60*minute)
+	if allocation(s, b, "e1").Ready {
+		t.Fatal("mixed versions approved silently")
+	}
+	if _, err := s.Apply(boss, "accounting-version", url.Values{"id": {a1}, "algorithm": {AlgorithmVersion}}, base+61*minute); err == nil {
+		t.Fatal("version change has no reason")
+	}
+	must(t, s, "accounting-version", url.Values{"id": {a1}, "algorithm": {AlgorithmVersion}, "reason": {"主管核对，整组采用批内等速估算"}}, 61*minute)
+	if allocation(s, a1, "e1").Accounted+allocation(s, a2, "e1").Accounted != 30*minute || allocation(s, b, "e1").Accounted != 30*minute {
+		t.Fatal("v2 did not fix cuts")
+	}
+	move(t, s, "approve", a1, 62*minute)
+	before, _ := json.Marshal(s.Allocations)
+	s.Recalculate(base + 100*minute)
+	after, _ := json.Marshal(s.Allocations)
+	if string(before) != string(after) {
+		t.Fatal("approved facts changed")
+	}
+	// An old approved group remains byte-for-byte stable on new activity.
+	for i := range s.Batches {
+		s.Batches[i].Algorithm = "interval-v1"
+	}
+	for i := range s.Allocations {
+		s.Allocations[i].Algorithm = "interval-v1"
+	}
+	before, _ = json.Marshal(s.Allocations)
+	must(t, s, "center", url.Values{"code": {"NEW"}, "name": {"新增中心"}}, 101*minute)
+	after, _ = json.Marshal(s.Allocations)
+	if string(before) != string(after) {
+		t.Fatal("legacy approved results rewritten")
+	}
+	// Simulate an imported dependency adjoining a locked v1 batch. Only explicit
+	// adoption of v1 is allowed, never recalculation of the approved allocation.
+	s.Batch(b).Status = "pending"
+	s.Batch(b).Algorithm = AlgorithmVersion
+	locked := allocation(s, a1, "e1")
+	if _, err := s.Apply(boss, "accounting-version", url.Values{"id": {b}, "algorithm": {AlgorithmVersion}, "reason": {"不允许"}}, base+102*minute); err == nil {
+		t.Fatal("locked version changed")
+	}
+	must(t, s, "accounting-version", url.Values{"id": {b}, "algorithm": {"interval-v1"}, "reason": {"沿用已审关联版本"}}, 103*minute)
+	if allocation(s, a1, "e1") != locked || !allocation(s, b, "e1").Ready {
+		t.Fatal("legacy dependency cannot be completed")
+	}
+}
+
+func TestParallelCollaborationLifecycle(t *testing.T) {
+	s := fixture()
+	s.Versions[0].Collaboration = true
+	s.Members = append(s.Members, Member{"a2", "a", "e2", true})
+	move(t, s, "start", "a", 0)
+	move(t, s, "start", "b", 0)
+	must(t, s, "join", url.Values{"id": {"a"}, "employee_id": {"e3"}}, 10*minute)
+	move(t, s, "pause", "a", 20*minute)
+	must(t, s, "transfer", url.Values{"id": {"a"}, "employee_id": {"e2"}}, 21*minute)
+	must(t, s, "leave", url.Values{"id": {"a"}, "employee_id": {"e1"}}, 22*minute)
+	move(t, s, "resume", "a", 30*minute)
+	must(t, s, "join", url.Values{"id": {"a"}, "employee_id": {"e1"}}, 40*minute)
+	a := complete(t, s, "a", "100", 60*minute)
+	b := complete(t, s, "b", "40", 60*minute)
+	var qty, cents int64
+	totals := map[string]int64{}
+	for _, x := range s.Allocations {
+		qty += x.Good
+		cents += x.Cents
+		totals[x.EmployeeID] += x.Accounted
+	}
+	if qty != 140*Scale || cents != 21000 || totals["e1"] != 60*minute || totals["e2"] != 50*minute || totals["e3"] != 40*minute {
+		t.Fatalf("qty=%d cents=%d totals=%v", qty, cents, totals)
+	}
+	x := allocation(s, a, "e1")
+	if x.Effective != 40*minute || x.Accounted >= x.Effective || x.Good != 307692 || allocation(s, b, "e1").Accounted <= 0 {
+		t.Fatalf("D02 must use participation, not allocated time: %+v", x)
+	}
+	move(t, s, "approve", a, 61*minute)
+	if s.Batch(b).Status != "approved" {
+		t.Fatal("collaboration dependencies not jointly approved")
+	}
+}
+
+func TestExclusiveMemberBlocksWholeTeamAndPausedJoin(t *testing.T) {
+	s := fixture()
+	s.Versions[0].Collaboration = true
+	s.Versions[1].Parallel = false
+	s.Dispatch("b").LeaderID = "e2"
+	s.Members[1].EmployeeID = "e2"
+	s.Members = append(s.Members, Member{"a2", "a", "e2", true})
+	move(t, s, "start", "b", 0)
+	if _, err := s.Apply(boss, "start", url.Values{"id": {"a"}}, base+minute); err == nil {
+		t.Fatal("conflicting nonleader was ignored")
+	}
+	if len(s.Spans) != 1 {
+		t.Fatal("failed team start partially opened spans")
+	}
+	s.Members[2].Present = false
+	move(t, s, "start", "a", 2*minute)
+	move(t, s, "pause", "a", 3*minute)
+	if _, err := s.Apply(boss, "join", url.Values{"id": {"a"}, "employee_id": {"e2"}}, base+4*minute); err == nil {
+		t.Fatal("paused join did not reserve exclusive tasks")
+	}
+	s.Versions[1].Parallel = true
+	must(t, s, "join", url.Values{"id": {"a"}, "employee_id": {"e2"}}, 5*minute)
+	move(t, s, "resume", "a", 6*minute)
+	if len(s.Spans) != 4 {
+		t.Fatal("resume did not open each member exactly once")
+	}
+}
+
+func TestCollaborationFractionalConservation(t *testing.T) {
+	s := fixture()
+	s.Versions[0].Collaboration = true
+	s.Versions[0].Price = 1
+	s.Members = append(s.Members, Member{"a2", "a", "e2", true}, Member{"a3", "a", "e3", true})
+	move(t, s, "start", "a", 0)
+	a := complete(t, s, "a", "1.0001", minute)
+	var q, cents, actual int64
+	for _, x := range s.Allocations {
+		if x.BatchID == a {
+			q += x.Good
+			cents += x.Cents
+			actual += x.Accounted
+		}
+	}
+	if q != 10001 || cents != 1 || actual != 3*minute {
+		t.Fatal(q, cents, actual)
+	}
+	before, _ := json.Marshal(s.Allocations)
+	s.Recalculate(base + 2*minute)
+	after, _ := json.Marshal(s.Allocations)
+	if string(before) != string(after) {
+		t.Fatal("remainder replay not deterministic")
 	}
 }

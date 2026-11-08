@@ -21,3 +21,16 @@ body { background: #f4f6fa; color: #172238; }
 @media(max-width: 850px) { .sidebar { position: static; width: auto; padding: 16px; } .sidebar nav { display: flex; flex-wrap: wrap; } .sidebar a { padding: 8px; } .content { margin: 0; padding: 20px; } }
 
 .alert-success { background: #e6f5ee; color: #195b42; border-color: #c7e7d8; }
+
+.task-card { border-top: 5px solid #94a3b8; scroll-margin-top: 20px; }
+.task-running { border-top-color: #087b62; }
+.task-paused { border-top-color: #d48a08; background: #fffdf5; }
+.task-card:target { box-shadow: 0 0 0 3px #78bfb4; }
+.quantity-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; font-size:12px; color:#526174; }
+.quantity-grid strong { display:block; font-size:22px; color:#172238; margin-top:6px; overflow-wrap:anywhere; }
+.filter-bar { display:flex; flex-direction:row; flex-wrap:wrap; align-items:end; gap:12px; }
+.filter-bar .field { flex:1; min-width:160px; margin:0; }
+.filter-bar .btn { min-height:48px; }
+.form-feedback { margin-top:12px; }
+[aria-busy="true"] { opacity:.7; }
+[id^="batch-"] { scroll-margin-top:20px; }

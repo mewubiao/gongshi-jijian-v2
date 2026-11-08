@@ -90,6 +90,7 @@ type Span struct {
 	BatchID    *string `json:"batch_id"`
 }
 type Batch struct {
+	Algorithm  string `json:"algorithm"`
 	ID         string `json:"id"`
 	DispatchID string `json:"dispatch_id"`
 	Good       int64  `json:"good"`
@@ -98,6 +99,14 @@ type Batch struct {
 	Status     string `json:"status"`
 	Reason     string `json:"reason"`
 }
+
+func (b *Batch) AccountingVersion() string {
+	if b.Algorithm == "" {
+		return "interval-v1"
+	}
+	return b.Algorithm
+}
+
 type Revision struct {
 	ID      string `json:"id"`
 	BatchID string `json:"batch_id"`

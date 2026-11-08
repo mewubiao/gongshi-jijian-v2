@@ -46,7 +46,7 @@ INSERT INTO dispatches (id, snapshot_id, quantity, leader_id, status, at) SELECT
 INSERT INTO members (id, dispatch_id, employee_id, present) SELECT x.id, x.dispatch_id, x.employee_id, x.present FROM jsonb_populate_record(NULL::members, $1::jsonb) AS x ON CONFLICT(id) DO UPDATE SET present=EXCLUDED.present;
 
 -- name: SaveBatches :exec
-INSERT INTO batches (id, dispatch_id, good, bad, at, status, reason) SELECT x.id, x.dispatch_id, x.good, x.bad, x.at, x.status, x.reason FROM jsonb_populate_record(NULL::batches, $1::jsonb) AS x ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status, reason=EXCLUDED.reason;
+INSERT INTO batches (id, dispatch_id, good, bad, at, status, reason, algorithm) SELECT x.id, x.dispatch_id, x.good, x.bad, x.at, x.status, x.reason, x.algorithm FROM jsonb_populate_record(NULL::batches, $1::jsonb) AS x ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status, reason=EXCLUDED.reason, algorithm=EXCLUDED.algorithm;
 
 -- name: SaveRevisions :exec
 INSERT INTO revisions (id, batch_id, good, bad, reason, actor, at) SELECT x.id, x.batch_id, x.good, x.bad, x.reason, x.actor, x.at FROM jsonb_populate_record(NULL::revisions, $1::jsonb) AS x ON CONFLICT(id) DO NOTHING;
@@ -55,7 +55,7 @@ INSERT INTO revisions (id, batch_id, good, bad, reason, actor, at) SELECT x.id, 
 INSERT INTO spans (id, dispatch_id, employee_id, start_us, end_us, batch_id) SELECT x.id, x.dispatch_id, x.employee_id, x.start_us, x.end_us, x.batch_id FROM jsonb_populate_record(NULL::spans, $1::jsonb) AS x ON CONFLICT(id) DO UPDATE SET end_us=EXCLUDED.end_us, batch_id=EXCLUDED.batch_id;
 
 -- name: SaveAllocations :exec
-INSERT INTO allocations (id, algorithm, batch_id, employee_id, good, bad, raw_us, effective_us, accounted_us, cents, ready, reason) SELECT x.id, x.algorithm, x.batch_id, x.employee_id, x.good, x.bad, x.raw_us, x.effective_us, x.accounted_us, x.cents, x.ready, x.reason FROM jsonb_populate_record(NULL::allocations, $1::jsonb) AS x ON CONFLICT(id) DO UPDATE SET good=EXCLUDED.good, bad=EXCLUDED.bad, raw_us=EXCLUDED.raw_us, effective_us=EXCLUDED.effective_us, accounted_us=EXCLUDED.accounted_us, cents=EXCLUDED.cents, ready=EXCLUDED.ready, reason=EXCLUDED.reason;
+INSERT INTO allocations (id, algorithm, batch_id, employee_id, good, bad, raw_us, effective_us, accounted_us, cents, ready, reason) SELECT x.id, x.algorithm, x.batch_id, x.employee_id, x.good, x.bad, x.raw_us, x.effective_us, x.accounted_us, x.cents, x.ready, x.reason FROM jsonb_populate_record(NULL::allocations, $1::jsonb) AS x ON CONFLICT(id) DO UPDATE SET algorithm=EXCLUDED.algorithm, good=EXCLUDED.good, bad=EXCLUDED.bad, raw_us=EXCLUDED.raw_us, effective_us=EXCLUDED.effective_us, accounted_us=EXCLUDED.accounted_us, cents=EXCLUDED.cents, ready=EXCLUDED.ready, reason=EXCLUDED.reason;
 
 -- name: SaveAudits :exec
 INSERT INTO audits (id, actor, action, target, at, payload) SELECT x.id, x.actor, x.action, x.target, x.at, x.payload FROM jsonb_populate_record(NULL::audits, $1::jsonb) AS x ON CONFLICT(id) DO NOTHING;

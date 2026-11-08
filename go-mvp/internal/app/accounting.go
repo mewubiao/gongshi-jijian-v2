@@ -1,11 +1,13 @@
 package app
 
 import (
+	"fmt"
 	"math/big"
 	"sort"
+	"strings"
 )
 
-const AlgorithmVersion = "interval-v1"
+const AlgorithmVersion = "interval-v2"
 
 // Split uses largest remainders, with stable keys breaking ties. All totals are conserved.
 func Split(total int64, keys []string, weights []*big.Int) []int64 {
@@ -50,11 +52,11 @@ func roundedProduct(a, b, div int64) int64 {
 }
 func (s *State) Components(now int64) (map[string]string, map[string]string) {
 	parent := map[string]string{}
-	blocked := map[string]string{}
+	blocked := map[string][]string{}
 	for _, b := range s.Batches {
 		parent[b.ID] = b.ID
 		if b.Status == "rejected" {
-			blocked[b.ID] = "关联批次被驳回，待修正重报"
+			blocked[b.ID] = append(blocked[b.ID], "批次 "+b.ID+" 被驳回，请修正重报")
 		}
 	}
 	var root func(string) string
@@ -86,9 +88,9 @@ func (s *State) Components(now int64) (map[string]string, map[string]string) {
 				ra, rb := root(*a.BatchID), root(*b.BatchID)
 				parent[ra] = rb
 			} else if a.BatchID != nil {
-				blocked[*a.BatchID] = "并行任务尚有未报工区间"
+				blocked[*a.BatchID] = append(blocked[*a.BatchID], "待报工："+s.TaskLabel(b.DispatchID)+" 缺少重叠区间数量")
 			} else if b.BatchID != nil {
-				blocked[*b.BatchID] = "并行任务尚有未报工区间"
+				blocked[*b.BatchID] = append(blocked[*b.BatchID], "待报工："+s.TaskLabel(a.DispatchID)+" 缺少重叠区间数量")
 			}
 		}
 	}
@@ -96,9 +98,36 @@ func (s *State) Components(now int64) (map[string]string, map[string]string) {
 	for id := range parent {
 		roots[id] = root(id)
 	}
+	groupReasons := map[string][]string{}
+	versions := map[string]map[string]bool{}
+	for _, b := range s.Batches {
+		r := roots[b.ID]
+		groupReasons[r] = append(groupReasons[r], blocked[b.ID]...)
+		if versions[r] == nil {
+			versions[r] = map[string]bool{}
+		}
+		versions[r][b.AccountingVersion()] = true
+	}
+	for r, vs := range versions {
+		if len(vs) > 1 {
+			groupReasons[r] = append(groupReasons[r], "版本依赖：关联批次核算版本不同，请在核算版本处理中记录原因并统一整组版本；已审版本须保留")
+		}
+		for v := range vs {
+			if v != "interval-v1" && v != AlgorithmVersion {
+				groupReasons[r] = append(groupReasons[r], "未知核算版本："+v)
+			}
+		}
+	}
 	reasons := map[string]string{}
-	for id, reason := range blocked {
-		reasons[roots[id]] = reason
+	for r, messages := range groupReasons {
+		sort.Strings(messages)
+		var unique []string
+		for _, msg := range messages {
+			if len(unique) == 0 || unique[len(unique)-1] != msg {
+				unique = append(unique, msg)
+			}
+		}
+		reasons[r] = strings.Join(unique, "；")
 	}
 	return roots, reasons
 }
@@ -142,18 +171,18 @@ func (s *State) Recalculate(now int64) {
 			total += effective[id]
 		}
 		if total == 0 {
-			reasons[roots[b.ID]] = "没有有效参与时间，请审查原始区间"
+			reasons[roots[b.ID]] += "；批次 " + b.ID + " 没有有效参与时间，请审查原始区间与时间修正"
 		}
 		g, bad := s.Counts(b)
 		gs, bs := Split(g, keys, weights), Split(bad, keys, weights)
 		v := s.Standard(s.Dispatch(b.DispatchID))
 		standard, _ := s.AccountingStandard(b.ID)
 		if standard == 0 {
-			reasons[roots[b.ID]] = "冻结标准工时为零，需主管记录处理；不可自动核算"
+			reasons[roots[b.ID]] += "；批次 " + b.ID + " 冻结标准为零，请在零标准异常处理中追加核实依据"
 		}
 		cents := Split(roundedProduct(g, v.Price, Scale), keys, weights)
 		for j, id := range keys {
-			s.Allocations = append(s.Allocations, Allocation{Algorithm: AlgorithmVersion, ID: b.ID + ":" + id, BatchID: b.ID, EmployeeID: id, Good: gs[j], Bad: bs[j], Raw: raw[id], Effective: effective[id], Cents: cents[j]})
+			s.Allocations = append(s.Allocations, Allocation{Algorithm: b.AccountingVersion(), ID: b.ID + ":" + id, BatchID: b.ID, EmployeeID: id, Good: gs[j], Bad: bs[j], Raw: raw[id], Effective: effective[id], Cents: cents[j]})
 		}
 	}
 	// Take pointers only after append stops, to avoid pointers into a reallocated slice.
@@ -175,7 +204,18 @@ func (s *State) Recalculate(now int64) {
 		std, _ := s.AccountingStandard(b.ID)
 		n := new(big.Int).Mul(big.NewInt(std), big.NewInt(g+bad))
 		n.Mul(n, big.NewInt(a.Effective))
-		return new(big.Rat).SetFrac(n, big.NewInt(total))
+		weight := new(big.Rat).SetFrac(n, big.NewInt(total))
+		if b.AccountingVersion() == AlgorithmVersion {
+			if a.Effective == 0 {
+				return new(big.Rat)
+			}
+			// v2 projects exact personal quantity over its effective participation.
+			// The fragment duration is common to active tasks and cancels out of
+			// their ratio: standard * quantity * personalTime/teamTime / personalTime.
+			// This assumes uniform output within each batch, not measured fragment output.
+			weight.Quo(weight, new(big.Rat).SetInt64(a.Effective))
+		}
+		return weight
 	}
 	for _, e := range s.Employees {
 		var spans []Span
@@ -224,7 +264,10 @@ func (s *State) Recalculate(now int64) {
 			}
 			if sum.Sign() == 0 {
 				for _, a := range active {
-					reasons[roots[a.BatchID]] = "并行权重合计为零"
+					reason := "并行权重合计为零，请核对关联批次数量与标准"
+					if !strings.Contains(reasons[roots[a.BatchID]], reason) {
+						reasons[roots[a.BatchID]] += "；" + reason
+					}
 				}
 				continue
 			}
@@ -241,12 +284,17 @@ func (s *State) Recalculate(now int64) {
 		if s.Batch(a.BatchID).Status == "approved" {
 			continue
 		}
-		a.Reason = reasons[roots[a.BatchID]]
+		a.Reason = strings.TrimPrefix(reasons[roots[a.BatchID]], "；")
 		a.Ready = a.Reason == ""
 		if a.Ready {
 			_, a.Reason = s.AccountingStandard(a.BatchID)
 		}
 	}
+}
+
+func (s *State) TaskLabel(id string) string {
+	d := s.Dispatch(id)
+	return fmt.Sprintf("%s / %s（派工 %s）", s.Order(s.Snapshot(d.SnapshotID).OrderID).ExternalID, s.Standard(d).Name, id)
 }
 
 // WorkingSpans subtracts the union of append-only corrections; original clock records stay intact.

@@ -2,7 +2,8 @@ import { chromium } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 
-const base = process.env.BASE_URL || 'http://127.0.0.1:8080';
+const base = process.env.BASE_URL;
+assert.ok(base, '请显式设置 BASE_URL，指向可写入测试数据的隔离实例');
 const out = process.env.ARTIFACT_DIR || 'artifacts';
 await mkdir(out, { recursive: true });
 const browser = await chromium.launch({headless:true, ...(process.env.BROWSER_EXECUTABLE ? {executablePath:process.env.BROWSER_EXECUTABLE} : {})});

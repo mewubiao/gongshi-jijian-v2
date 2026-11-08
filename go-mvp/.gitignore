@@ -4,3 +4,6 @@ bin/
 .pg/
 artifacts/
 *.log
+
+.pg-wb5/
+__pycache__/

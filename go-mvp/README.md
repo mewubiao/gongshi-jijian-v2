@@ -50,7 +50,7 @@ go run . -migrate -seed -demo
 6. 管理员或主管进入“报工审核”，可驳回并填原因、修改数量重报、扣除异常参与时间。原始报工/区间不覆盖，修正另存。数量未齐的并行批次待核算，齐备后相互依赖的批次联合通过。
 7. “工时与计件”按月份、员工、车间、工单、工序、日期和状态筛选并导出 CSV。汇总只计已通过记录；100合格工序单位×冻结1.50元＝150.00元。协作查看四人个人分量。原始、修正后有效、并行核算工时分列。
 
-若只演示协作，请先完工正在执行的单人任务。协作任务采用排他参与；组长可登记加入/离开，离场前先移交组长。暂停不计时，但保留人员占用。
+协作工序与其他任务并行时，所有涉及的工序都须开启并行；任一排他任务会拦截。组长可登记加入/离开，离场前先移交组长。暂停不计时，但保留人员占用。
 
 ## 开发与验证
 
@@ -68,7 +68,7 @@ make test                            # go test / go vet / go test -race
 
 ```sh
 npx playwright install chromium
-BASE_URL=http://127.0.0.1:8080 npm run smoke
+BASE_URL=http://127.0.0.1:18080 npm run smoke
 ```
 
 也可通过 `BROWSER_EXECUTABLE` 指向现有 Chromium / Edge。脚本使用真实页面和数据库：CSV文件导入与更新→派工→刷工牌→开工/暂停/继续→退出重登→30/40/30→驳回重报→审核→统计/CSV→实测15秒退出，保存截图与报告到 `artifacts/`。每次新建独立演示工单，适用于演示库。
@@ -80,3 +80,10 @@ BASE_URL=http://127.0.0.1:8080 npm run smoke
 `internal/app/` 保存领域规则、核算、会话和 HTTP；`db/schema.sql` 是幂等迁移，`db/queries.sql` 与 `sqlc.yaml` 生成 `internal/store/`；`web/` 是 Go Templates、Tailwind4+daisyUI5 源码和构建产物。数据库是有主外键、唯一键和 CHECK 的关系表；JSON仅用于 sqlc 输入/读取投影及审计载荷，不替代数据库实体关系。
 
 请一并阅读 [决策与核算限制](docs/DECISIONS.md) 和 [实测报告](docs/TEST-REPORT.md)。完整工资发放/月结锁账、班次归属、辅助作业、返工、真实 ERP 对接、缺失时间补录和已审核工资更正属于后续，当前是生产闭环 MVP。
+
+
+## WB-5 优化版
+
+当前新增报工使用 `interval-v2`；原有批次保留 `interval-v1`，已审核结果不重算。主管可在审核卡的“核算版本处理”中记录原因，统一关联未审批次版本。算法依据、兼容迁移和本地升级记录见 [WB-5-RELEASE.md](docs/WB-5-RELEASE.md)。
+
+浏览器脚本会新增业务数据，必须显式指定隔离实例，例如 `BASE_URL=http://127.0.0.1:18080 npm run smoke` 和 `npm run smoke:wb5`（同样指定 BASE_URL）。集成测试的 `TEST_DATABASE_URL` 也应指向独立实例；请勿指向正在试用的本地业务库。
