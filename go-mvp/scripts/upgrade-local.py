@@ -61,7 +61,8 @@ def stop_app():
         command = subprocess.check_output(['/bin/ps', '-p', str(pid), '-o', 'command='], text=True).strip()
         if pid == daemon or command.split(' -', 1)[0] != str(BINARY):
             raise RuntimeError('Unexpected app PID/command; refusing to stop it')
-    run(['/bin/launchctl', 'bootout', DOMAIN + '/' + LABEL])
+    # The second database check requires all in-flight requests to have exited.
+    run(['/bin/launchctl', 'bootout', '--wait', DOMAIN + '/' + LABEL], timeout=35)
 
 
 def start_app():
@@ -90,12 +91,23 @@ def write_json(path, value):
 
 
 def restore(backup):
+    previous_binary = backup / 'workshop.previous'
+    if not previous_binary.is_file():
+        raise FileNotFoundError('Previous executable is missing; current service was not stopped')
     # A legacy binary cannot understand new v2 business facts. Never restore a
     # stale database dump over work recorded since the upgrade.
     if any(b.get('algorithm') == 'interval-v2' for b in snapshot()['batches']):
         raise RuntimeError('v2 reports exist: keep the current service and repair forward; legacy rollback would corrupt accounting')
     stop_app()
-    atomic_binary(backup / 'workshop.previous')
+    try:
+        # Requests accepted between the first check and graceful shutdown can
+        # still commit. Check again with the app stopped before replacing it.
+        if any(b.get('algorithm') == 'interval-v2' for b in snapshot()['batches']):
+            raise RuntimeError('v2 reports arrived before shutdown; legacy rollback refused')
+    except Exception:
+        start_app()  # The current binary and source have not been touched.
+        raise
+    atomic_binary(previous_binary)
     previous = backup / 'source.previous'
     if previous.exists():
         (ROOT / 'source').rename(backup / ('source.replaced-' + str(time.time_ns())))
