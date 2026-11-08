@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"workshop/internal/store"
 )
 
 func realDB(t *testing.T) (Database, *atomic.Int64) {
@@ -362,4 +363,130 @@ func TestPostgresHTTPPermissionsCSRFIdleAndPages(t *testing.T) {
 		}
 	}
 	_ = adminCSRF
+}
+
+func TestPostgresV2AccountingAndLegacyMigration(t *testing.T) {
+	db, clock := realDB(t)
+	ctx := context.Background()
+	s := fixture()
+	s.Versions[0].Standard = s.Versions[1].Standard
+	move(t, s, "start", "a", 0)
+	move(t, s, "start", "b", 0)
+	a1 := must(t, s, "report", url.Values{"id": {"a"}, "good": {"10"}}, 30*minute)
+	a2 := complete(t, s, "a", "10", 60*minute)
+	b := complete(t, s, "b", "20", 60*minute)
+	for i := range s.Batches {
+		s.Batches[i].Algorithm = "interval-v1"
+	}
+	s.Dispatches = append(s.Dispatches, Dispatch{ID: "legacy-approved", SnapshotID: "a", Quantity: 10 * Scale, LeaderID: "e3", Status: "ready", At: base})
+	s.Members = append(s.Members, Member{ID: "legacy-member", DispatchID: "legacy-approved", EmployeeID: "e3", Present: true})
+	move(t, s, "start", "legacy-approved", 0)
+	old := complete(t, s, "legacy-approved", "5", 60*minute)
+	s.Batch(old).Algorithm = "interval-v1"
+	s.Recalculate(base + 60*minute)
+	move(t, s, "approve", old, 60*minute)
+	oldAllocation := allocation(s, old, "e3")
+	if err := save(ctx, store.New(db.Pool), s); err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the old schema shape with real existing pending/approved rows.
+	if _, err := db.Pool.Exec(ctx, "ALTER TABLE batches DROP COLUMN algorithm"); err != nil {
+		t.Fatal(err)
+	}
+	migration, err := os.ReadFile("../../db/schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := read(t, db)
+	beforeAllocs, _ := json.Marshal(before.Allocations)
+	for range 2 {
+		if _, err = db.Pool.Exec(ctx, string(migration)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s = read(t, db)
+	afterAllocs, _ := json.Marshal(s.Allocations)
+	if string(beforeAllocs) != string(afterAllocs) || s.Batch(b).AccountingVersion() != "interval-v1" {
+		t.Fatal("migration rewrote history")
+	}
+	clock.Store(base + 61*minute)
+	key := NewID()
+	params := url.Values{"id": {a1}, "algorithm": {AlgorithmVersion}, "reason": {"核对整组等速生产"}, "request_id": {key}}
+	mutation(t, db, boss, "accounting-version", params)
+	mutation(t, db, boss, "accounting-version", params)
+	s = read(t, db)
+	if allocation(s, a1, "e1").Accounted+allocation(s, a2, "e1").Accounted != 30*minute || allocation(s, b, "e1").Accounted != 30*minute || allocation(s, b, "e1").Algorithm != AlgorithmVersion {
+		t.Fatal("persisted v2 is incorrect")
+	}
+	events := 0
+	for _, a := range s.Audits {
+		if a.Action == "accounting-version" {
+			events++
+			if !strings.Contains(string(a.Payload), "version_changes") {
+				t.Fatal("missing conversion evidence")
+			}
+		}
+	}
+	if events != 1 {
+		t.Fatal("conversion is not idempotent")
+	}
+	mutation(t, db, boss, "approve", url.Values{"id": {a1}})
+	beforeAllocs, _ = json.Marshal(read(t, db).Allocations)
+	mutation(t, db, boss, "center", url.Values{"code": {"PROOF"}, "name": {"保留已审记录"}})
+	afterAllocs, _ = json.Marshal(read(t, db).Allocations)
+	if string(beforeAllocs) != string(afterAllocs) || allocation(read(t, db), old, "e3") != oldAllocation {
+		t.Fatal("approved data changed after save")
+	}
+}
+
+func TestPostgresParallelCollaborationLifecycle(t *testing.T) {
+	db, clock := realDB(t)
+	s := fixture()
+	s.Versions[0].Collaboration = true
+	s.Members = append(s.Members, Member{"a2", "a", "e2", true})
+	if err := save(context.Background(), store.New(db.Pool), s); err != nil {
+		t.Fatal(err)
+	}
+	do := func(at int64, action string, f url.Values) string {
+		clock.Store(base + at*minute)
+		return mutation(t, db, boss, action, f)
+	}
+	do(0, "start", url.Values{"id": {"a"}})
+	do(0, "start", url.Values{"id": {"b"}})
+	do(20, "pause", url.Values{"id": {"a"}, "reason": {"设备检查"}})
+	do(21, "transfer", url.Values{"id": {"a"}, "employee_id": {"e2"}})
+	do(22, "leave", url.Values{"id": {"a"}, "employee_id": {"e1"}})
+	do(30, "resume", url.Values{"id": {"a"}})
+	do(60, "finish", url.Values{"id": {"a"}, "good": {"100"}})
+	do(60, "finish", url.Values{"id": {"b"}, "good": {"40"}})
+	s = read(t, db)
+	var a, b string
+	for _, x := range s.Batches {
+		if x.DispatchID == "a" {
+			a = x.ID
+		}
+		if x.DispatchID == "b" {
+			b = x.ID
+		}
+	}
+	do(61, "approve", url.Values{"id": {a}})
+	s = read(t, db)
+	if s.Batch(b).Status != "approved" || allocation(s, a, "e1").Effective != 20*minute {
+		t.Fatal("persisted team lifecycle inconsistent")
+	}
+	var qty, cents, e1, e2 int64
+	for _, x := range s.Allocations {
+		if x.BatchID == a || x.BatchID == b {
+			qty += x.Good
+			cents += x.Cents
+			if x.EmployeeID == "e1" {
+				e1 += x.Accounted
+			} else {
+				e2 += x.Accounted
+			}
+		}
+	}
+	if qty != 140*Scale || cents != 21000 || e1 != 60*minute || e2 != 50*minute {
+		t.Fatal(qty, cents, e1, e2)
+	}
 }

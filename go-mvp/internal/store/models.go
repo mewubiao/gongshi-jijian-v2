@@ -40,6 +40,7 @@ type Batch struct {
 	At         int64
 	Status     string
 	Reason     string
+	Algorithm  string
 }
 
 type Center struct {

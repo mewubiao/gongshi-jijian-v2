@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -22,6 +23,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"workshop/internal/store"
 )
+
+var BuildVersion = "development"
 
 type Server struct {
 	db                        Database
@@ -42,7 +45,15 @@ type Page struct {
 	Rows                       []Stat
 	Summary                    Stat
 	Filter                     url.Values
+	Reviews                    []Review
+	Target                     string
 }
+type Review struct {
+	B             Batch
+	Phase, Reason string
+	Links         []ReviewLink
+}
+type ReviewLink struct{ Href, Label string }
 type Task struct {
 	Raw                                  int64
 	ActiveMembers                        int64
@@ -51,6 +62,10 @@ type Task struct {
 	Mine                                 bool
 	Members                              []MemberView
 	Reported                             int64
+	Approved, Remaining                  int64
+	Unreported                           bool
+	Parallel, Collaboration              bool
+	Feedback, Error                      string
 	Price, Standard                      int64
 }
 type MemberView struct {
@@ -65,6 +80,7 @@ type Stat struct {
 	Good, Bad, Raw, Accounted, Cents                         int64
 	Ready                                                    bool
 	BatchID                                                  string
+	Algorithm                                                string
 }
 
 func NewServer(db Database, assets fs.FS, demo bool, admin, supervisor string, secure bool) (http.Handler, error) {
@@ -115,6 +131,7 @@ func NewServer(db Database, assets fs.FS, demo bool, admin, supervisor string, s
 	r.Use(middleware.Recoverer)
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Workshop-Version", BuildVersion)
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Referrer-Policy", "same-origin")
 			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
@@ -149,7 +166,7 @@ func NewServer(db Database, assets fs.FS, demo bool, admin, supervisor string, s
 	return r, nil
 }
 func status(v string) string {
-	m := map[string]string{"ready": "待开工", "running": "进行中", "paused": "已暂停", "finished": "已完工", "pending": "待审核", "approved": "已通过", "rejected": "已驳回", "open": "未关闭", "closed": "已关闭", "admin": "管理员", "supervisor": "主管", "employee": "员工"}
+	m := map[string]string{"ready": "待开工", "running": "进行中", "paused": "已暂停", "finished": "已完工", "unaccounted": "待核算", "pending": "待审核", "approved": "已通过", "rejected": "已驳回", "open": "未关闭", "closed": "已关闭", "admin": "管理员", "supervisor": "主管", "employee": "员工"}
 	if x, ok := m[v]; ok {
 		return x
 	}
@@ -330,11 +347,32 @@ func (s *Server) action(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		log.Printf("操作 %s 失败: %v", action, err)
+		if r.Header.Get("Accept") == "application/json" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": friendly(err)})
+			return
+		}
 		redirect(w, r, dest+"?error="+url.QueryEscape(friendly(err)))
 		return
 	}
 	_ = store.New(s.db.Pool).TouchSession(r.Context(), store.TouchSessionParams{Token: row.Token, LastSeen: s.db.Now().UnixMicro()})
-	redirect(w, r, dest+"?notice="+url.QueryEscape("操作已保存"))
+	message := map[string]string{"start": "已开工，正在计时", "pause": "已暂停，暂停期间不计参与时间", "resume": "已继续作业", "report": "本次新增量已保存，任务继续", "finish": "末批已保存，任务已完工", "approve": "本批及关联批次已通过审核", "accounting-version": "整组核算版本已统一，处理原因已留痕"}[action]
+	if message == "" {
+		message = "操作已保存"
+	}
+	target := r.Form.Get("id")
+	anchor := "task-" + target
+	if dest == "/review" {
+		anchor = "batch-" + target
+	}
+	location := dest + "?notice=" + url.QueryEscape(message) + "&target=" + url.QueryEscape(target) + "#" + anchor
+	if r.Header.Get("Accept") == "application/json" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"redirect": location})
+		return
+	}
+	redirect(w, r, location)
 }
 func friendly(err error) string {
 	if strings.Contains(err.Error(), "SQLSTATE") {
@@ -354,7 +392,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "数据库读取失败", 500)
 		return
 	}
-	p := Page{S: state, Session: row, Path: r.URL.Path, Title: map[string]string{"/": "生产概览", "/orders": "生产工单", "/master": "基础资料", "/dispatch": "派工管理", "/review": "报工审核", "/stats": "工时与计件统计", "/audit": "操作审计", "/terminal": "车间公共终端"}[r.URL.Path], Error: r.URL.Query().Get("error"), Notice: r.URL.Query().Get("notice"), Demo: s.demo, Now: s.db.Now().UnixMicro(), Filter: r.URL.Query()}
+	p := Page{S: state, Session: row, Path: r.URL.Path, Title: map[string]string{"/": "生产概览", "/orders": "生产工单", "/master": "基础资料", "/dispatch": "派工管理", "/review": "报工审核", "/stats": "工时与计件统计", "/audit": "操作审计", "/terminal": "车间公共终端"}[r.URL.Path], Error: r.URL.Query().Get("error"), Notice: r.URL.Query().Get("notice"), Demo: s.demo, Now: s.db.Now().UnixMicro(), Filter: r.URL.Query(), Target: r.URL.Query().Get("target")}
 	if row.Role == "employee" {
 		p.Title = state.Employee(row.EmployeeID).Name + " · 我的任务"
 	}
@@ -365,7 +403,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		snap := state.Snapshot(d.SnapshotID)
 		o := state.Order(snap.OrderID)
 		v := state.Standard(&d)
-		task := Task{D: d, Name: v.Name, Order: o.ExternalID, Product: state.Product(o.ProductID).Name, Center: state.Center(o.CenterID).Name, Leader: state.Employee(d.LeaderID).Name, Mine: row.Role != "employee" || row.EmployeeID == d.LeaderID, Price: v.Price, Standard: v.Standard}
+		task := Task{D: d, Name: v.Name, Order: o.ExternalID, Product: state.Product(o.ProductID).Name, Center: state.Center(o.CenterID).Name, Leader: state.Employee(d.LeaderID).Name, Mine: row.Role != "employee" || row.EmployeeID == d.LeaderID, Price: v.Price, Standard: v.Standard, Parallel: v.Parallel, Collaboration: v.Collaboration}
 		for _, m := range state.Members {
 			if m.DispatchID == d.ID {
 				task.Members = append(task.Members, MemberView{m.EmployeeID, state.Employee(m.EmployeeID).Name, m.Present})
@@ -375,6 +413,9 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 			if b.DispatchID == d.ID {
 				g, bad := state.Counts(&b)
 				task.Reported += g + bad
+				if b.Status == "approved" {
+					task.Approved += g + bad
+				}
 			}
 		}
 		for _, sp := range state.Spans {
@@ -385,11 +426,46 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 					task.ActiveMembers++
 				}
 				task.Raw += end - sp.Start
+				if sp.BatchID == nil && end > sp.Start {
+					task.Unreported = true
+				}
+			}
+		}
+		task.Remaining = max(0, d.Quantity-task.Reported)
+		if p.Target == d.ID {
+			task.Feedback = p.Notice
+			task.Error = p.Error
+		}
+		if v := p.Filter.Get("task"); v != "" && d.ID != v {
+			continue
+		}
+		if p.Path == "/terminal" || p.Path == "/dispatch" {
+			if v := p.Filter.Get("status"); v != "" && d.Status != v {
+				continue
+			}
+			if v := p.Filter.Get("employee"); v != "" && !state.IsMember(d.ID, v) {
+				continue
+			}
+			if q := strings.ToLower(p.Filter.Get("q")); q != "" && !strings.Contains(strings.ToLower(task.Order+" "+task.Name+" "+task.Product+" "+task.Leader), q) {
+				continue
 			}
 		}
 		p.Tasks = append(p.Tasks, task)
 	}
-	sort.Slice(p.Tasks, func(i, j int) bool { return p.Tasks[i].D.At > p.Tasks[j].D.At })
+	priority := map[string]int{"running": 0, "paused": 1, "ready": 2, "finished": 3}
+	sort.Slice(p.Tasks, func(i, j int) bool {
+		a, b := p.Tasks[i].D, p.Tasks[j].D
+		if priority[a.Status] != priority[b.Status] {
+			return priority[a.Status] < priority[b.Status]
+		}
+		if a.At == b.At {
+			return a.ID < b.ID
+		}
+		return a.At > b.At
+	})
+	if p.Path == "/review" {
+		p.Reviews = reviewRows(state, p.Filter, p.Now)
+	}
 	p.Rows = stats(state, row, p.Filter)
 	for _, x := range p.Rows {
 		if x.Status == "approved" {
@@ -471,10 +547,14 @@ func stats(state *State, row store.Session, f url.Values) []Stat {
 		if v := f.Get("operation"); v != "" && snap.OperationID != v {
 			continue
 		}
-		if v := f.Get("status"); v != "" && b.Status != v {
+		phase := b.Status
+		if phase == "pending" && !a.Ready {
+			phase = "unaccounted"
+		}
+		if v := f.Get("status"); v != "" && phase != v {
 			continue
 		}
-		out = append(out, Stat{At: b.At, EmployeeID: a.EmployeeID, Employee: state.Employee(a.EmployeeID).Name, Center: state.Center(order.CenterID).Name, Order: order.ExternalID, Operation: state.Version(snap.VersionID).Name, Date: date, Status: b.Status, Reason: a.Reason, Good: a.Good, Bad: a.Bad, Raw: a.Raw, Effective: a.Effective, Accounted: a.Accounted, Cents: a.Cents, Ready: a.Ready, BatchID: b.ID})
+		out = append(out, Stat{At: b.At, EmployeeID: a.EmployeeID, Employee: state.Employee(a.EmployeeID).Name, Center: state.Center(order.CenterID).Name, Order: order.ExternalID, Operation: state.Version(snap.VersionID).Name, Date: date, Status: phase, Reason: a.Reason, Good: a.Good, Bad: a.Bad, Raw: a.Raw, Effective: a.Effective, Accounted: a.Accounted, Cents: a.Cents, Ready: a.Ready, BatchID: b.ID, Algorithm: a.Algorithm})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].At == out[j].At {
@@ -483,6 +563,75 @@ func stats(state *State, row store.Session, f url.Values) []Stat {
 		return out[i].At < out[j].At
 	})
 	return out
+}
+
+func reviewRows(s *State, f url.Values, now int64) []Review {
+	roots, _ := s.Components(now)
+	working := s.WorkingSpans()
+	var rows []Review
+	for _, b := range s.Batches {
+		r := Review{B: b, Phase: b.Status}
+		ready, found := true, false
+		for _, a := range s.Allocations {
+			if a.BatchID == b.ID {
+				found = true
+				ready = ready && a.Ready
+				if !a.Ready {
+					r.Reason = a.Reason
+				}
+			}
+		}
+		if b.Status == "pending" && (!ready || !found) {
+			r.Phase = "unaccounted"
+		}
+		if !found {
+			r.Reason = "缺少参与明细，请检查原始区间"
+		}
+		if v := f.Get("status"); v != "" && v != r.Phase {
+			continue
+		}
+		if v := f.Get("batch"); v != "" && v != b.ID {
+			continue
+		}
+		if q := strings.ToLower(f.Get("q")); q != "" && !strings.Contains(strings.ToLower(s.TaskLabel(b.DispatchID)+" "+b.ID), q) {
+			continue
+		}
+		if v := f.Get("employee"); v != "" {
+			matched := false
+			for _, a := range s.Allocations {
+				if a.BatchID == b.ID && a.EmployeeID == v {
+					matched = true
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		seen := map[string]bool{}
+		for _, other := range s.Batches {
+			if other.ID != b.ID && roots[other.ID] == roots[b.ID] {
+				r.Links = append(r.Links, ReviewLink{"/review?batch=" + other.ID + "#batch-" + other.ID, "关联批次 " + other.ID[:min(8, len(other.ID))] + " · " + other.AccountingVersion()})
+			}
+		}
+		// Follow all members of the dependency closure, including unreported tasks.
+		for _, a := range working {
+			if a.BatchID == nil || roots[*a.BatchID] != roots[b.ID] {
+				continue
+			}
+			for _, u := range working {
+				end := u.End
+				if end == 0 {
+					end = now
+				}
+				if u.BatchID == nil && u.EmployeeID == a.EmployeeID && a.Start < end && u.Start < a.End && !seen[u.DispatchID] {
+					seen[u.DispatchID] = true
+					r.Links = append(r.Links, ReviewLink{"/terminal?task=" + u.DispatchID + "#task-" + u.DispatchID, "去补报：" + s.TaskLabel(u.DispatchID)})
+				}
+			}
+		}
+		rows = append(rows, r)
+	}
+	return rows
 }
 func (s *Server) export(w http.ResponseWriter, r *http.Request) {
 	state, err := s.db.Read(r.Context())
@@ -494,7 +643,7 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=workshop-report.csv")
 	w.Write([]byte{0xef, 0xbb, 0xbf})
 	out := csv.NewWriter(w)
-	_ = out.Write([]string{"日期", "员工", "车间", "工单", "工序", "状态", "合格工序量", "不良工序量", "原始分钟", "修正后有效分钟", "核算分钟", "计件元", "核算情况"})
+	_ = out.Write([]string{"日期", "员工", "车间", "工单", "工序", "状态", "合格工序量", "不良工序量", "原始分钟", "修正后有效分钟", "核算分钟", "计件元", "核算情况", "核算版本"})
 	safe := func(v string) string {
 		if strings.ContainsAny(strings.TrimLeft(v, " \t\r\n")[:min(1, len(strings.TrimLeft(v, " \t\r\n")))], "=+-@") {
 			return "'" + v
@@ -502,7 +651,7 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) {
 		return v
 	}
 	for _, x := range stats(state, session(r), r.URL.Query()) {
-		_ = out.Write([]string{x.Date, safe(x.Employee), safe(x.Center), safe(x.Order), safe(x.Operation), status(x.Status), Quantity(x.Good), Quantity(x.Bad), fmt.Sprintf("%.6f", float64(x.Raw)/60000000), fmt.Sprintf("%.6f", float64(x.Effective)/60000000), fmt.Sprintf("%.6f", float64(x.Accounted)/60000000), Money(x.Cents), safe(x.Reason)})
+		_ = out.Write([]string{x.Date, safe(x.Employee), safe(x.Center), safe(x.Order), safe(x.Operation), status(x.Status), Quantity(x.Good), Quantity(x.Bad), fmt.Sprintf("%.6f", float64(x.Raw)/60000000), fmt.Sprintf("%.6f", float64(x.Effective)/60000000), fmt.Sprintf("%.6f", float64(x.Accounted)/60000000), Money(x.Cents), safe(x.Reason), x.Algorithm})
 	}
 	out.Flush()
 }

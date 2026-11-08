@@ -4,3 +4,6 @@ node_modules
 artifacts
 bin
 *.log
+
+.pg*
+__pycache__

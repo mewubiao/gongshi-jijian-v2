@@ -37,8 +37,8 @@ func (s *State) conflict(d *Dispatch, employee string) error {
 		if other.Status != "running" && other.Status != "paused" {
 			continue
 		}
-		if !s.Standard(d).Parallel || !s.Standard(other).Parallel || s.Standard(d).Collaboration || s.Standard(other).Collaboration {
-			return fmt.Errorf("员工 %s 存在冲突任务：并行须双方开启，协作采用排他参与，暂停保留占用", s.Employee(employee).Name)
+		if !s.Standard(d).Parallel || !s.Standard(other).Parallel {
+			return fmt.Errorf("员工 %s 与 %s 冲突：涉及的每项任务都须开启并行；暂停仍保留占用", s.Employee(employee).Name, s.TaskLabel(other.ID))
 		}
 	}
 	return nil
@@ -62,11 +62,22 @@ func (s *State) Apply(a Actor, action string, f url.Values, now int64) (string, 
 	id := f.Get("id")
 	result := id
 	switch action {
-	case "center", "employee", "product", "operation", "dispatch", "import", "approve", "reject", "revise", "resolve", "trim":
+	case "center", "employee", "product", "operation", "dispatch", "import", "approve", "reject", "revise", "resolve", "trim", "accounting-version":
 		if !a.Admin() && action != "revise" {
 			return "", fmt.Errorf("需要管理员或主管权限")
 		}
 	}
+	if action == "trim" || action == "resolve" || action == "revise" {
+		if b := s.Batch(id); b != nil && b.Status != "approved" {
+			roots, _ := s.Components(now)
+			for _, x := range s.Batches {
+				if roots[x.ID] == roots[id] && x.Status == "approved" {
+					return "", fmt.Errorf("关联批次 %s 已审核锁定；不能改变数量或时间核算依据", x.ID)
+				}
+			}
+		}
+	}
+
 	switch action {
 	case "center":
 		if err := required(f, "code", "name"); err != nil {
@@ -274,14 +285,20 @@ func (s *State) Apply(a Actor, action string, f url.Values, now int64) (string, 
 			if d.Status != want {
 				return "", fmt.Errorf("当前状态不可开工或继续")
 			}
+			// Validate every member before opening any span (also for direct State callers).
 			for _, m := range s.Members {
 				if m.DispatchID == id && m.Present {
 					if !s.Employee(m.EmployeeID).Active {
 						return "", fmt.Errorf("存在停用成员")
 					}
-					if err := s.open(d, m.EmployeeID, now); err != nil {
+					if err := s.conflict(d, m.EmployeeID); err != nil {
 						return "", err
 					}
+				}
+			}
+			for _, m := range s.Members {
+				if m.DispatchID == id && m.Present {
+					s.Spans = append(s.Spans, Span{ID: NewID(), DispatchID: id, EmployeeID: m.EmployeeID, Start: now})
 				}
 			}
 			d.Status = "running"
@@ -371,7 +388,7 @@ func (s *State) Apply(a Actor, action string, f url.Values, now int64) (string, 
 				return "", fmt.Errorf("本批次尚无有效参与工时")
 			}
 			result = NewID()
-			s.Batches = append(s.Batches, Batch{result, id, g, bad, now, "pending", ""})
+			s.Batches = append(s.Batches, Batch{Algorithm: AlgorithmVersion, ID: result, DispatchID: id, Good: g, Bad: bad, At: now, Status: "pending"})
 			for i := range s.Spans {
 				sp := &s.Spans[i]
 				if sp.DispatchID == id && sp.BatchID == nil && sp.End > 0 {
@@ -431,6 +448,33 @@ func (s *State) Apply(a Actor, action string, f url.Values, now int64) (string, 
 				return "", fmt.Errorf("请先报工")
 			}
 			d.Status = "finished"
+		}
+	case "accounting-version":
+		b := s.Batch(id)
+		if b == nil || b.Status == "approved" {
+			return "", fmt.Errorf("请选择未审核批次")
+		}
+		if err := required(f, "reason", "algorithm"); err != nil {
+			return "", err
+		}
+		version := f.Get("algorithm")
+		if version != "interval-v1" && version != AlgorithmVersion {
+			return "", fmt.Errorf("核算版本无效")
+		}
+		roots, _ := s.Components(now)
+		for _, x := range s.Batches {
+			if roots[x.ID] == roots[id] && x.Status == "approved" && x.AccountingVersion() != version {
+				return "", fmt.Errorf("关联批次 %s 已按 %s 锁定，请选择相同版本；已审历史不可重算", x.ID, x.AccountingVersion())
+			}
+		}
+		// Preserve the complete before/after decision in the ordinary audit event.
+		f.Del("version_changes")
+		for i := range s.Batches {
+			x := &s.Batches[i]
+			if roots[x.ID] == roots[id] && x.Status != "approved" {
+				f.Add("version_changes", x.ID+":"+x.AccountingVersion()+"→"+version)
+				x.Algorithm = version
+			}
 		}
 	case "trim":
 		b := s.Batch(id)

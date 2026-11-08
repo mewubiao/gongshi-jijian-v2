@@ -99,7 +99,7 @@ func (q *Queries) PutSession(ctx context.Context, arg PutSessionParams) error {
 }
 
 const saveAllocations = `-- name: SaveAllocations :exec
-INSERT INTO allocations (id, algorithm, batch_id, employee_id, good, bad, raw_us, effective_us, accounted_us, cents, ready, reason) SELECT x.id, x.algorithm, x.batch_id, x.employee_id, x.good, x.bad, x.raw_us, x.effective_us, x.accounted_us, x.cents, x.ready, x.reason FROM jsonb_populate_record(NULL::allocations, $1::jsonb) AS x ON CONFLICT(id) DO UPDATE SET good=EXCLUDED.good, bad=EXCLUDED.bad, raw_us=EXCLUDED.raw_us, effective_us=EXCLUDED.effective_us, accounted_us=EXCLUDED.accounted_us, cents=EXCLUDED.cents, ready=EXCLUDED.ready, reason=EXCLUDED.reason
+INSERT INTO allocations (id, algorithm, batch_id, employee_id, good, bad, raw_us, effective_us, accounted_us, cents, ready, reason) SELECT x.id, x.algorithm, x.batch_id, x.employee_id, x.good, x.bad, x.raw_us, x.effective_us, x.accounted_us, x.cents, x.ready, x.reason FROM jsonb_populate_record(NULL::allocations, $1::jsonb) AS x ON CONFLICT(id) DO UPDATE SET algorithm=EXCLUDED.algorithm, good=EXCLUDED.good, bad=EXCLUDED.bad, raw_us=EXCLUDED.raw_us, effective_us=EXCLUDED.effective_us, accounted_us=EXCLUDED.accounted_us, cents=EXCLUDED.cents, ready=EXCLUDED.ready, reason=EXCLUDED.reason
 `
 
 func (q *Queries) SaveAllocations(ctx context.Context, dollar_1 []byte) error {
@@ -117,7 +117,7 @@ func (q *Queries) SaveAudits(ctx context.Context, dollar_1 []byte) error {
 }
 
 const saveBatches = `-- name: SaveBatches :exec
-INSERT INTO batches (id, dispatch_id, good, bad, at, status, reason) SELECT x.id, x.dispatch_id, x.good, x.bad, x.at, x.status, x.reason FROM jsonb_populate_record(NULL::batches, $1::jsonb) AS x ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status, reason=EXCLUDED.reason
+INSERT INTO batches (id, dispatch_id, good, bad, at, status, reason, algorithm) SELECT x.id, x.dispatch_id, x.good, x.bad, x.at, x.status, x.reason, x.algorithm FROM jsonb_populate_record(NULL::batches, $1::jsonb) AS x ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status, reason=EXCLUDED.reason, algorithm=EXCLUDED.algorithm
 `
 
 func (q *Queries) SaveBatches(ctx context.Context, dollar_1 []byte) error {
