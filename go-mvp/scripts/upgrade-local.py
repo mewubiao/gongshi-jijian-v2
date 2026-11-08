@@ -5,11 +5,11 @@ Usage: upgrade-local.py upgrade bin/workshop
        upgrade-local.py rollback <backup-directory-name>
 The runtime's MULTICA_CLI_PATH must be set for every process lifecycle change.
 """
+
 import datetime
 import hashlib
 import json
 import os
-from pathlib import Path
 import plistlib
 import re
 import shutil
@@ -17,14 +17,19 @@ import subprocess
 import sys
 import time
 import urllib.request
+from pathlib import Path
 
-ROOT = Path(os.environ.get('WORKSHOP_LOCAL_ROOT', Path.home() / '.local/share/gongshi-jijian-go-mvp'))
+ROOT = Path(
+    os.environ.get(
+        "WORKSHOP_LOCAL_ROOT", Path.home() / ".local/share/gongshi-jijian-go-mvp"
+    )
+)
 SOURCE = Path(__file__).resolve().parents[1]
-LABEL = 'com.multica.gongshi-jijian-go-mvp.app'
-DOMAIN = f'gui/{os.getuid()}'
-PLIST = Path.home() / 'Library/LaunchAgents' / (LABEL + '.plist')
-BINARY = ROOT / 'bin/workshop'
-PSQL = '/opt/homebrew/bin/psql'
+LABEL = "com.multica.gongshi-jijian-go-mvp.app"
+DOMAIN = f"gui/{os.getuid()}"
+PLIST = Path.home() / "Library/LaunchAgents" / (LABEL + ".plist")
+BINARY = ROOT / "bin/workshop"
+PSQL = "/opt/homebrew/bin/psql"
 
 
 def run(args, **kwargs):
@@ -36,164 +41,287 @@ def config():
 
 
 def dsn():
-    return config()['EnvironmentVariables']['DATABASE_URL']
+    return config()["EnvironmentVariables"]["DATABASE_URL"]
 
 
 def snapshot():
-    query = "SELECT jsonb_object_agg(tab, rows) FROM (" + ' UNION ALL '.join(
-        "SELECT '%s' AS tab, coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]'::jsonb) AS rows FROM %s t" % (t, t)
-        for t in ('centers', 'employees', 'products', 'operations', 'versions', 'orders', 'snapshots', 'dispatches', 'members', 'batches', 'spans', 'allocations', 'revisions', 'resolutions', 'trims', 'audits', 'requests')
-    ) + ') AS data'
-    return json.loads(subprocess.check_output([PSQL, dsn(), '-XAt', '-c', query]))
+    query = (
+        "SELECT jsonb_object_agg(tab, rows) FROM ("
+        + " UNION ALL ".join(
+            f"SELECT '{t}' AS tab, "
+            "coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]'::jsonb) "
+            f"AS rows FROM {t} t"
+            for t in (
+                "centers",
+                "employees",
+                "products",
+                "operations",
+                "versions",
+                "orders",
+                "snapshots",
+                "dispatches",
+                "members",
+                "batches",
+                "spans",
+                "allocations",
+                "revisions",
+                "resolutions",
+                "trims",
+                "audits",
+                "requests",
+            )
+        )
+        + ") AS data"
+    )
+    return json.loads(subprocess.check_output([PSQL, dsn(), "-XAt", "-c", query]))
 
 
 def stop_app():
-    cli = os.environ.get('MULTICA_CLI_PATH')
+    cli = os.environ.get("MULTICA_CLI_PATH")
     if not cli:
-        raise RuntimeError('MULTICA_CLI_PATH is required; refusing to stop an unverified process')
-    daemon = json.loads(subprocess.check_output([cli, 'daemon', 'status', '--output', 'json']))['pid']
-    job = subprocess.run(['/bin/launchctl', 'print', DOMAIN + '/' + LABEL], capture_output=True, text=True)
+        raise RuntimeError(
+            "MULTICA_CLI_PATH is required; refusing to stop an unverified process"
+        )
+    daemon = json.loads(
+        subprocess.check_output([cli, "daemon", "status", "--output", "json"])
+    )["pid"]
+    job = subprocess.run(
+        ["/bin/launchctl", "print", DOMAIN + "/" + LABEL],
+        capture_output=True,
+        text=True,
+    )
     if job.returncode:
         return
-    match = re.search(r'^\s*pid = (\d+)', job.stdout, re.M)
+    match = re.search(r"^\s*pid = (\d+)", job.stdout, re.M)
     if match:
         pid = int(match.group(1))
-        command = subprocess.check_output(['/bin/ps', '-p', str(pid), '-o', 'command='], text=True).strip()
-        if pid == daemon or command.split(' -', 1)[0] != str(BINARY):
-            raise RuntimeError('Unexpected app PID/command; refusing to stop it')
+        command = subprocess.check_output(
+            ["/bin/ps", "-p", str(pid), "-o", "command="], text=True
+        ).strip()
+        if pid == daemon or command.split(" -", 1)[0] != str(BINARY):
+            raise RuntimeError("Unexpected app PID/command; refusing to stop it")
     # The second database check requires all in-flight requests to have exited.
-    run(['/bin/launchctl', 'bootout', '--wait', DOMAIN + '/' + LABEL], timeout=35)
+    run(["/bin/launchctl", "bootout", "--wait", DOMAIN + "/" + LABEL], timeout=35)
 
 
 def start_app():
-    run(['/bin/launchctl', 'bootstrap', DOMAIN, str(PLIST)])
+    run(["/bin/launchctl", "bootstrap", DOMAIN, str(PLIST)])
     for _ in range(40):
         try:
-            with urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=1) as response:
-                if response.status == 200 and response.read() == b'ok':
-                    return response.headers.get('X-Workshop-Version', 'legacy-interval-v1')
+            with urllib.request.urlopen(
+                "http://127.0.0.1:8080/healthz", timeout=1
+            ) as response:
+                if response.status == 200 and response.read() == b"ok":
+                    return response.headers.get(
+                        "X-Workshop-Version", "legacy-interval-v1"
+                    )
         except OSError:
             pass
-        time.sleep(.25)
-    raise RuntimeError('App readiness failed; inspect private local logs')
+        time.sleep(0.25)
+    raise RuntimeError("App readiness failed; inspect private local logs")
 
 
 def atomic_binary(source):
-    target = BINARY.with_name('workshop.next')
+    target = BINARY.with_name("workshop.next")
     shutil.copy2(source, target)
     target.chmod(0o755)
     os.replace(target, BINARY)
 
 
 def write_json(path, value):
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     path.chmod(0o600)
 
 
 def restore(backup):
-    previous_binary = backup / 'workshop.previous'
+    previous_binary = backup / "workshop.previous"
     if not previous_binary.is_file():
-        raise FileNotFoundError('Previous executable is missing; current service was not stopped')
+        raise FileNotFoundError(
+            "Previous executable is missing; current service was not stopped"
+        )
     compatible = False
-    previous_version = backup / 'version.previous.json'
+    previous_version = backup / "version.previous.json"
     if previous_version.is_file():
-        metadata = json.loads(previous_version.read_text(encoding='utf-8'))
-        version = metadata.get('version', '')
-        compatible = metadata.get('binary_sha256') == hashlib.sha256(previous_binary.read_bytes()).hexdigest() and (
-            version.startswith('WB5-interval-v2') or 'interval-v2' in metadata.get('accounting_algorithms', []))
+        metadata = json.loads(previous_version.read_text(encoding="utf-8"))
+        version = metadata.get("version", "")
+        compatible = metadata.get("binary_sha256") == hashlib.sha256(
+            previous_binary.read_bytes()
+        ).hexdigest() and (
+            version.startswith("WB5-interval-v2")
+            or "interval-v2" in metadata.get("accounting_algorithms", [])
+        )
     # A legacy binary cannot understand new v2 business facts. Never restore a
     # stale database dump over work recorded since the upgrade.
-    if not compatible and any(b.get('algorithm') == 'interval-v2' for b in snapshot()['batches']):
-        raise RuntimeError('v2 reports exist: keep the current service and repair forward; legacy rollback would corrupt accounting')
+    if not compatible and any(
+        b.get("algorithm") == "interval-v2" for b in snapshot()["batches"]
+    ):
+        raise RuntimeError(
+            "v2 reports exist: keep the current service and repair forward; "
+            "legacy rollback would corrupt accounting"
+        )
     stop_app()
     try:
         # Requests accepted between the first check and graceful shutdown can
         # still commit. Check again with the app stopped before replacing it.
-        if not compatible and any(b.get('algorithm') == 'interval-v2' for b in snapshot()['batches']):
-            raise RuntimeError('v2 reports arrived before shutdown; legacy rollback refused')
+        if not compatible and any(
+            b.get("algorithm") == "interval-v2" for b in snapshot()["batches"]
+        ):
+            raise RuntimeError(
+                "v2 reports arrived before shutdown; legacy rollback refused"
+            )
     except Exception:
         start_app()  # The current binary and source have not been touched.
         raise
     atomic_binary(previous_binary)
-    previous = backup / 'source.previous'
+    previous = backup / "source.previous"
     if previous.exists():
-        (ROOT / 'source').rename(backup / ('source.replaced-' + str(time.time_ns())))
-        previous.rename(ROOT / 'source')
+        (ROOT / "source").rename(backup / ("source.replaced-" + str(time.time_ns())))
+        previous.rename(ROOT / "source")
     version = start_app()
-    write_json(ROOT / 'run/version.json', {'version':version, 'binary_sha256':hashlib.sha256(BINARY.read_bytes()).hexdigest(), 'accounting_algorithms':['interval-v1','interval-v2'] if compatible else ['interval-v1'], 'rolled_back_from':str(backup), 'at':datetime.datetime.now().isoformat()})
+    write_json(
+        ROOT / "run/version.json",
+        {
+            "version": version,
+            "binary_sha256": hashlib.sha256(BINARY.read_bytes()).hexdigest(),
+            "accounting_algorithms": ["interval-v1", "interval-v2"]
+            if compatible
+            else ["interval-v1"],
+            "rolled_back_from": str(backup),
+            "at": datetime.datetime.now().isoformat(),
+        },
+    )
     return version
 
 
 def upgrade(candidate):
     if not candidate.is_file() or candidate.resolve() == BINARY.resolve():
-        raise RuntimeError('Supply a separate, verified candidate binary')
-    backup = ROOT / 'backups' / ('upgrade-' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
+        raise RuntimeError("Supply a separate, verified candidate binary")
+    backup = (
+        ROOT
+        / "backups"
+        / ("upgrade-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    )
     backup.mkdir(parents=True, mode=0o700)
-    shutil.copy2(BINARY, backup / 'workshop.previous')
-    (backup / 'workshop.previous').chmod(0o700)
-    version_file = ROOT / 'run/version.json'
+    shutil.copy2(BINARY, backup / "workshop.previous")
+    (backup / "workshop.previous").chmod(0o700)
+    version_file = ROOT / "run/version.json"
     if version_file.is_file():
-        shutil.copy2(version_file, backup / 'version.previous.json')
-    shutil.copy2(PLIST, backup / 'app.plist')
-    (backup / 'app.plist').chmod(0o600)
-    staged = ROOT / ('source.next-' + str(time.time_ns()))
-    shutil.copytree(SOURCE, staged, ignore=shutil.ignore_patterns('.pg*', 'node_modules', 'bin', 'artifacts', '.git', '*.log', '__pycache__'))
+        shutil.copy2(version_file, backup / "version.previous.json")
+    shutil.copy2(PLIST, backup / "app.plist")
+    (backup / "app.plist").chmod(0o600)
+    staged = ROOT / ("source.next-" + str(time.time_ns()))
+    shutil.copytree(
+        SOURCE,
+        staged,
+        ignore=shutil.ignore_patterns(
+            ".pg*", "node_modules", "bin", "artifacts", ".git", "*.log", "__pycache__"
+        ),
+    )
     stopped = False
     ready = False
     try:
         stop_app()
         stopped = True
         before = snapshot()
-        write_json(backup / 'state-before.json', before)
-        run(['/opt/homebrew/bin/pg_dump', '-Fc', '--dbname', dsn(), '--file', str(backup / 'before.dump')])
-        (backup / 'before.dump').chmod(0o600)
-        run([str(candidate.resolve()), '-migrate', '-once'], env=dict(os.environ, DATABASE_URL=dsn()), timeout=30)
+        write_json(backup / "state-before.json", before)
+        run(
+            [
+                "/opt/homebrew/bin/pg_dump",
+                "-Fc",
+                "--dbname",
+                dsn(),
+                "--file",
+                str(backup / "before.dump"),
+            ]
+        )
+        (backup / "before.dump").chmod(0o600)
+        run(
+            [str(candidate.resolve()), "-migrate", "-once"],
+            env=dict(os.environ, DATABASE_URL=dsn()),
+            timeout=30,
+        )
         after = snapshot()
         old_shape = json.loads(json.dumps(after))
-        for batch in old_shape['batches']:
-            if 'algorithm' not in next(b for b in before['batches'] if b['id'] == batch['id']):
-                if batch.pop('algorithm') != 'interval-v1':
-                    raise RuntimeError('Legacy batch received an incorrect version')
+        for batch in old_shape["batches"]:
+            if "algorithm" not in next(
+                b for b in before["batches"] if b["id"] == batch["id"]
+            ):
+                if batch.pop("algorithm") != "interval-v1":
+                    raise RuntimeError("Legacy batch received an incorrect version")
         if before != old_shape:
-            raise RuntimeError('Migration changed existing business data')
+            raise RuntimeError("Migration changed existing business data")
         atomic_binary(candidate)
         version = start_app()
-        if version == 'legacy-interval-v1':
-            raise RuntimeError('Candidate did not identify its version')
+        if version == "legacy-interval-v1":
+            raise RuntimeError("Candidate did not identify its version")
         ready = True
         # Every source copy is retained privately; the executable embeds assets.
-        (ROOT / 'source').rename(backup / 'source.previous')
-        staged.rename(ROOT / 'source')
+        (ROOT / "source").rename(backup / "source.previous")
+        staged.rename(ROOT / "source")
         current = snapshot()
         for table, rows in before.items():
-            if not {r['id'] for r in rows}.issubset({r['id'] for r in current[table]}):
-                raise RuntimeError('Existing records are missing after startup: ' + table)
-        approved = {b['id'] for b in before['batches'] if b['status'] == 'approved'}
-        old_allocs = [a for a in before['allocations'] if a['batch_id'] in approved]
-        if old_allocs != [a for a in current['allocations'] if a['batch_id'] in approved]:
-            raise RuntimeError('Approved allocations changed after startup')
-        manifest = {'version':version, 'accounting_algorithms':['interval-v1','interval-v2'], 'binary_sha256':hashlib.sha256(BINARY.read_bytes()).hexdigest(), 'backup':str(backup), 'url':'http://127.0.0.1:8080', 'at':datetime.datetime.now().isoformat(), 'migration_business_data_unchanged':True, 'approved_allocations_unchanged':True, 'counts':{t:len(rows) for t, rows in current.items()}}
-        write_json(ROOT / 'run/version.json', manifest)
-        write_json(backup / 'upgrade-result.json', manifest)
-        print(json.dumps({'version':version,'backup':backup.name,'url':manifest['url'],'migration_business_data_unchanged':True,'approved_allocations_unchanged':True},ensure_ascii=False,indent=2))
+            if not {r["id"] for r in rows}.issubset({r["id"] for r in current[table]}):
+                raise RuntimeError(
+                    "Existing records are missing after startup: " + table
+                )
+        approved = {b["id"] for b in before["batches"] if b["status"] == "approved"}
+        old_allocs = [a for a in before["allocations"] if a["batch_id"] in approved]
+        if old_allocs != [
+            a for a in current["allocations"] if a["batch_id"] in approved
+        ]:
+            raise RuntimeError("Approved allocations changed after startup")
+        manifest = {
+            "version": version,
+            "accounting_algorithms": ["interval-v1", "interval-v2"],
+            "binary_sha256": hashlib.sha256(BINARY.read_bytes()).hexdigest(),
+            "backup": str(backup),
+            "url": "http://127.0.0.1:8080",
+            "at": datetime.datetime.now().isoformat(),
+            "migration_business_data_unchanged": True,
+            "approved_allocations_unchanged": True,
+            "counts": {t: len(rows) for t, rows in current.items()},
+        }
+        write_json(ROOT / "run/version.json", manifest)
+        write_json(backup / "upgrade-result.json", manifest)
+        print(
+            json.dumps(
+                {
+                    "version": version,
+                    "backup": backup.name,
+                    "url": manifest["url"],
+                    "migration_business_data_unchanged": True,
+                    "approved_allocations_unchanged": True,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     except Exception:
         if stopped and not ready:
-            print('Startup failed; restoring the previous app without restoring/deleting business data.', file=sys.stderr)
-            print('Restored version: ' + restore(backup), file=sys.stderr)
+            print(
+                "Startup failed; restoring the previous app "
+                "without restoring/deleting business data.",
+                file=sys.stderr,
+            )
+            print("Restored version: " + restore(backup), file=sys.stderr)
         raise
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in ('upgrade', 'rollback'):
+    if len(sys.argv) != 3 or sys.argv[1] not in ("upgrade", "rollback"):
         raise SystemExit(__doc__)
-    if sys.argv[1] == 'upgrade':
+    if sys.argv[1] == "upgrade":
         upgrade(Path(sys.argv[2]))
     else:
-        backup = (ROOT / 'backups' / sys.argv[2]).resolve()
-        if backup.parent != (ROOT / 'backups').resolve():
-            raise RuntimeError('Backup must be inside the private service backups directory')
-        print('Restored version: ' + restore(backup))
+        backup = (ROOT / "backups" / sys.argv[2]).resolve()
+        if backup.parent != (ROOT / "backups").resolve():
+            raise RuntimeError(
+                "Backup must be inside the private service backups directory"
+            )
+        print("Restored version: " + restore(backup))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
