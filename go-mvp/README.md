@@ -87,3 +87,16 @@ BASE_URL=http://127.0.0.1:18080 npm run smoke
 当前新增报工使用 `interval-v2`；原有批次保留 `interval-v1`，已审核结果不重算。主管可在审核卡的“核算版本处理”中记录原因，统一关联未审批次版本。算法依据、兼容迁移和本地升级记录见 [WB-5-RELEASE.md](docs/WB-5-RELEASE.md)。
 
 浏览器脚本会新增业务数据，必须显式指定隔离实例，例如 `BASE_URL=http://127.0.0.1:18080 npm run smoke` 和 `npm run smoke:wb5`（同样指定 BASE_URL）。集成测试的 `TEST_DATABASE_URL` 也应指向独立实例；请勿指向正在试用的本地业务库。
+
+## WB-6 流程与响应优化
+
+本轮新增“多人各自派工”，与多人协作一单分别呈现；一次选择工单工序，按人填量，展示合计与冻结工序余额，保存时整批校验。员工开工、暂停、恢复与新增量报工就地更新任务卡并恢复输入焦点。手机端压缩身份导航、按需展开筛选；客户端时钟不会续身份。
+
+统计改为数据库筛选和每页50条，汇总、员工合计及CSV使用相同完整筛选；终端读取仅加载相关任务，业务保存仅写变化的行。现有事务锁、首次冻结、interval-v1/v2 与已审历史规则保留。实测、复现及本地回退见 [WB-6-RELEASE.md](docs/WB-6-RELEASE.md)。
+
+```sh
+BASE_URL=http://127.0.0.1:18080 npm run smoke:wb6
+BASELINE_URL=http://127.0.0.1:18081 BASE_URL=http://127.0.0.1:18080 node scripts/compare-wb6.mjs
+```
+
+两条浏览器脚本均会写入隔离演示数据，不能指向8080用户环境。性能脚本 `scripts/measure-wb6.py --help` 提供独立数据库、两个版本及SQL日志计数的参数。

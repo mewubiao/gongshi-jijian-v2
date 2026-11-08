@@ -386,7 +386,7 @@ func TestPostgresV2AccountingAndLegacyMigration(t *testing.T) {
 	s.Recalculate(base + 60*minute)
 	move(t, s, "approve", old, 60*minute)
 	oldAllocation := allocation(s, old, "e3")
-	if err := save(ctx, store.New(db.Pool), s); err != nil {
+	if err := save(ctx, store.New(db.Pool), s, nil); err != nil {
 		t.Fatal(err)
 	}
 	// Recreate the old schema shape with real existing pending/approved rows.
@@ -444,7 +444,7 @@ func TestPostgresParallelCollaborationLifecycle(t *testing.T) {
 	s := fixture()
 	s.Versions[0].Collaboration = true
 	s.Members = append(s.Members, Member{"a2", "a", "e2", true})
-	if err := save(context.Background(), store.New(db.Pool), s); err != nil {
+	if err := save(context.Background(), store.New(db.Pool), s, nil); err != nil {
 		t.Fatal(err)
 	}
 	do := func(at int64, action string, f url.Values) string {

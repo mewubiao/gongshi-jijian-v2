@@ -41,11 +41,14 @@ func load(ctx context.Context, q *store.Queries) (*State, error) {
 	return s, err
 }
 func (db Database) Read(ctx context.Context) (*State, error) { return load(ctx, store.New(db.Pool)) }
-func saveRows[T any](ctx context.Context, rows []T, fn func(context.Context, []byte) error) error {
+func saveRows[T any](ctx context.Context, rows []T, fn func(context.Context, []byte) error, previous map[string]bool) error {
 	for _, r := range rows {
 		b, err := json.Marshal(r)
 		if err != nil {
 			return err
+		}
+		if previous[string(b)] {
+			continue
 		}
 		if err = fn(ctx, b); err != nil {
 			return err
@@ -53,17 +56,17 @@ func saveRows[T any](ctx context.Context, rows []T, fn func(context.Context, []b
 	}
 	return nil
 }
-func save(ctx context.Context, q *store.Queries, s *State) error {
+func save(ctx context.Context, q *store.Queries, s *State, previous map[string]map[string]bool) error {
 	checks := []func() error{
-		func() error { return saveRows(ctx, s.Centers, q.SaveCenters) }, func() error { return saveRows(ctx, s.Employees, q.SaveEmployees) },
-		func() error { return saveRows(ctx, s.Products, q.SaveProducts) }, func() error { return saveRows(ctx, s.Operations, q.SaveOperations) },
-		func() error { return saveRows(ctx, s.Versions, q.SaveVersions) }, func() error { return saveRows(ctx, s.Orders, q.SaveOrders) },
-		func() error { return saveRows(ctx, s.Snapshots, q.SaveSnapshots) }, func() error { return saveRows(ctx, s.Dispatches, q.SaveDispatches) },
-		func() error { return saveRows(ctx, s.Members, q.SaveMembers) }, func() error { return saveRows(ctx, s.Batches, q.SaveBatches) },
-		func() error { return saveRows(ctx, s.Revisions, q.SaveRevisions) }, func() error { return saveRows(ctx, s.Spans, q.SaveSpans) },
-		func() error { return saveRows(ctx, s.Resolutions, q.SaveResolutions) },
-		func() error { return saveRows(ctx, s.Trims, q.SaveTrims) }, func() error { return saveRows(ctx, s.Allocations, q.SaveAllocations) }, func() error { return saveRows(ctx, s.Audits, q.SaveAudits) },
-		func() error { return saveRows(ctx, s.Requests, q.SaveRequests) },
+		func() error { return saveRows(ctx, s.Centers, q.SaveCenters, previous["centers"]) }, func() error { return saveRows(ctx, s.Employees, q.SaveEmployees, previous["employees"]) },
+		func() error { return saveRows(ctx, s.Products, q.SaveProducts, previous["products"]) }, func() error { return saveRows(ctx, s.Operations, q.SaveOperations, previous["operations"]) },
+		func() error { return saveRows(ctx, s.Versions, q.SaveVersions, previous["versions"]) }, func() error { return saveRows(ctx, s.Orders, q.SaveOrders, previous["orders"]) },
+		func() error { return saveRows(ctx, s.Snapshots, q.SaveSnapshots, previous["snapshots"]) }, func() error { return saveRows(ctx, s.Dispatches, q.SaveDispatches, previous["dispatches"]) },
+		func() error { return saveRows(ctx, s.Members, q.SaveMembers, previous["members"]) }, func() error { return saveRows(ctx, s.Batches, q.SaveBatches, previous["batches"]) },
+		func() error { return saveRows(ctx, s.Revisions, q.SaveRevisions, previous["revisions"]) }, func() error { return saveRows(ctx, s.Spans, q.SaveSpans, previous["spans"]) },
+		func() error { return saveRows(ctx, s.Resolutions, q.SaveResolutions, previous["resolutions"]) },
+		func() error { return saveRows(ctx, s.Trims, q.SaveTrims, previous["trims"]) }, func() error { return saveRows(ctx, s.Allocations, q.SaveAllocations, previous["allocations"]) }, func() error { return saveRows(ctx, s.Audits, q.SaveAudits, previous["audits"]) },
+		func() error { return saveRows(ctx, s.Requests, q.SaveRequests, previous["requests"]) },
 	}
 	for _, fn := range checks {
 		if err := fn(); err != nil {
@@ -110,12 +113,16 @@ func (db Database) Mutate(ctx context.Context, a Actor, action string, f url.Val
 			return r.Result, nil
 		}
 	}
+	previous, err := rowImages(s)
+	if err != nil {
+		return "", err
+	}
 	result, err := s.Apply(a, action, input, db.Now().UnixMicro())
 	if err != nil {
 		return "", err
 	}
 	s.Requests = append(s.Requests, Request{token, a.ID, fingerprint, result})
-	if err = save(ctx, q, s); err != nil {
+	if err = save(ctx, q, s, previous); err != nil {
 		return "", fmt.Errorf("保存失败（唯一键或数据约束）：%w", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -194,8 +201,28 @@ func (db Database) Seed(ctx context.Context) error {
 			return err
 		}
 	}
-	if err = save(ctx, q, s); err != nil {
+	if err = save(ctx, q, s, nil); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// Keep the existing transaction and accounting rules; unchanged rows need no SQL writes.
+func rowImages(s *State) (map[string]map[string]bool, error) {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	var tables map[string][]json.RawMessage
+	if err = json.Unmarshal(data, &tables); err != nil {
+		return nil, err
+	}
+	out := make(map[string]map[string]bool, len(tables))
+	for table, rows := range tables {
+		out[table] = make(map[string]bool, len(rows))
+		for _, row := range rows {
+			out[table][string(row)] = true
+		}
+	}
+	return out, nil
 }

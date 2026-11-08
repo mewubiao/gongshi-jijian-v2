@@ -1,0 +1,9 @@
+{{define "bulkDispatch"}}
+<section class="card p-6 mb-8"><h2 class="text-xl font-bold mb-2">多人各自派工</h2><p class="muted text-sm mb-5">工单与工序只选一次。每名员工各生成一张独立任务，各自开工与报量；总量为所选员工数量之和。需要共同完成同一数量时，使用下方“多人协作一单”。</p>
+<form method="post" action="/action/dispatch-many" id="bulk-dispatch">{{template "token" .}}
+<div class="grid md:grid-cols-2 gap-4"><label class="field">生产工单<select class="select" name="order_id" id="bulk-order" required><option value="">选择未关闭工单</option>{{range .S.Orders}}{{if eq .Status "open"}}<option value="{{.ID}}" data-product="{{.ProductID}}">{{.ExternalID}} · {{qty .Quantity}} 产品单位</option>{{end}}{{end}}</select></label><label class="field">工序<select class="select" name="operation_id" id="bulk-operation" required><option value="">选择工序</option>{{range .S.Operations}}<option value="{{.ID}}" data-product="{{.ProductID}}">{{.Seq}} · {{.Name}}</option>{{end}}</select></label></div>
+<div hidden id="dispatch-plans">{{range .DispatchOptions}}<span data-order="{{.OrderID}}" data-operation="{{.OperationID}}" data-plan="{{.Plan}}" data-remaining="{{.Remaining}}" data-frozen="{{.Frozen}}"></span>{{end}}</div>
+<label class="field">查找员工<input class="input" type="search" id="bulk-employee-search" placeholder="姓名 / 编码；所选员工始终保留显示"></label>
+<div class="bulk-employees">{{range .S.Employees}}{{if .Active}}<div class="bulk-employee"><label><input class="bulk-checkbox" type="checkbox" name="employees" value="{{.ID}}"> {{.Code}} · {{.Name}}</label><label class="field">个人派工量 · 工序单位<input class="input" name="quantity_{{.ID}}" type="number" min="0.0001" step="0.0001" inputmode="decimal" aria-label="{{.Name}}个人派工量"></label></div>{{end}}{{end}}</div>
+<p class="alert my-5" id="bulk-preview" role="status">选择工单、工序和员工后，显示个人数量合计及工序余额。保存时再次校验，任一项失败整批不保存。</p><button class="btn btn-primary">确认预览，整批派工</button></form></section>
+{{end}}

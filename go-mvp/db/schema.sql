@@ -105,3 +105,10 @@ ALTER TABLE allocations ADD COLUMN IF NOT EXISTS algorithm text NOT NULL DEFAULT
 -- New application reports always supply an explicit version. Safe to rerun.
 ALTER TABLE batches ADD COLUMN IF NOT EXISTS algorithm text NOT NULL DEFAULT 'interval-v1'
  CHECK(algorithm IN ('interval-v1','interval-v2'));
+
+CREATE INDEX IF NOT EXISTS members_employee_dispatch ON members(employee_id,dispatch_id);
+CREATE INDEX IF NOT EXISTS batches_dispatch_at ON batches(dispatch_id,at,id);
+CREATE INDEX IF NOT EXISTS batches_at_id ON batches(at,id);
+CREATE INDEX IF NOT EXISTS spans_dispatch ON spans(dispatch_id);
+CREATE INDEX IF NOT EXISTS revisions_batch_at ON revisions(batch_id,at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS allocations_employee_batch ON allocations(employee_id,batch_id);

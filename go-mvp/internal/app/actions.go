@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -11,6 +12,9 @@ import (
 )
 
 type Actor struct{ ID, Role string }
+type fieldError struct{ Field, Message string }
+
+func (e fieldError) Error() string { return e.Message }
 
 func (a Actor) Admin() bool { return a.Role == "admin" || a.Role == "supervisor" }
 func required(f url.Values, keys ...string) error {
@@ -26,7 +30,11 @@ func quantity(f url.Values, key string) (int64, error) {
 	if v == "" {
 		v = "0"
 	}
-	return Decimal(v, 4)
+	n, err := Decimal(v, 4)
+	if err != nil {
+		return 0, fieldError{key, err.Error()}
+	}
+	return n, nil
 }
 func (s *State) conflict(d *Dispatch, employee string) error {
 	for _, member := range s.Members {
@@ -62,7 +70,7 @@ func (s *State) Apply(a Actor, action string, f url.Values, now int64) (string, 
 	id := f.Get("id")
 	result := id
 	switch action {
-	case "center", "employee", "product", "operation", "dispatch", "import", "approve", "reject", "revise", "resolve", "trim", "accounting-version":
+	case "center", "employee", "product", "operation", "dispatch", "dispatch-many", "import", "approve", "reject", "revise", "resolve", "trim", "accounting-version":
 		if !a.Admin() && action != "revise" {
 			return "", fmt.Errorf("需要管理员或主管权限")
 		}
@@ -79,6 +87,37 @@ func (s *State) Apply(a Actor, action string, f url.Values, now int64) (string, 
 	}
 
 	switch action {
+	case "dispatch-many":
+		ids := f["employees"]
+		if len(ids) == 0 || len(ids) > 100 {
+			return "", fmt.Errorf("请选择 1–100 名员工；每人独立派工，数量分别占用工序余额")
+		}
+		// Validate the whole batch on a private copy; one failure leaves no partial dispatches or freeze.
+		data, err := json.Marshal(s)
+		if err != nil {
+			return "", err
+		}
+		next := new(State)
+		if err = json.Unmarshal(data, next); err != nil {
+			return "", err
+		}
+		seen := map[string]bool{}
+		for _, employee := range ids {
+			if seen[employee] {
+				return "", fmt.Errorf("员工重复，整批未保存")
+			}
+			seen[employee] = true
+			values := url.Values{"order_id": {f.Get("order_id")}, "operation_id": {f.Get("operation_id")}, "quantity": {f.Get("quantity_" + employee)}, "members": {employee}}
+			if _, err = next.Apply(a, "dispatch", values, now); err != nil {
+				name := employee
+				if e := s.Employee(employee); e != nil {
+					name = e.Name
+				}
+				return "", fmt.Errorf("%s：%s；整批未保存，请修正后重试", name, err)
+			}
+		}
+		*s = *next
+		result = fmt.Sprintf("已为 %d 名员工分别派工", len(ids))
 	case "center":
 		if err := required(f, "code", "name"); err != nil {
 			return "", err
@@ -374,8 +413,11 @@ func (s *State) Apply(a Actor, action string, f url.Values, now int64) (string, 
 				return "", err
 			}
 			bad, err := quantity(f, "bad")
-			if err != nil || g+bad == 0 || g+bad > 1000000000000 {
-				return "", fmt.Errorf("本次新增数量须大于零且不超范围")
+			if err != nil {
+				return "", err
+			}
+			if g+bad == 0 || g+bad > 1000000000000 {
+				return "", fieldError{"good", "本次新增合格量与不良量合计须大于零且不超范围；请填写本批新增量"}
 			}
 			s.close(id, "", now)
 			var raw int64
