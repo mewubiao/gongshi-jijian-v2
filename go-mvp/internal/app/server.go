@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -35,6 +36,10 @@ type Server struct {
 	attempts                  map[string][]time.Time
 }
 type Page struct {
+	DispatchOptions            []DispatchOption
+	Total, PageNumber          int64
+	Prev, Next                 string
+	ReturnQuery                string
 	Monthly                    []Stat
 	S                          *State
 	Session                    store.Session
@@ -279,15 +284,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			id = role
 		}
 	default:
-		state, e := s.db.Read(r.Context())
-		if e == nil {
-			for _, employee := range state.Employees {
-				if employee.Active && (employee.Card == r.Form.Get("identity") || employee.Badge == r.Form.Get("identity")) {
-					id = employee.ID
-					break
-				}
-			}
-		}
+		id, _ = q.IdentifyEmployee(r.Context(), strings.TrimSpace(r.Form.Get("identity")))
 	}
 	if id == "" {
 		redirect(w, r, "/login?error="+url.QueryEscape("账号、密码或工牌码不正确"))
@@ -339,7 +336,7 @@ func (s *Server) action(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := chi.URLParam(r, "action")
-	_, err := s.db.Mutate(r.Context(), Actor{row.EmployeeID, row.Role}, action, r.Form)
+	outcome, err := s.db.Mutate(r.Context(), Actor{row.EmployeeID, row.Role}, action, r.Form)
 	dest := r.Form.Get("return")
 	allowed := map[string]bool{"/": true, "/orders": true, "/master": true, "/dispatch": true, "/review": true, "/terminal": true}
 	if !allowed[dest] {
@@ -350,7 +347,12 @@ func (s *Server) action(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Accept") == "application/json" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnprocessableEntity)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": friendly(err)})
+			result := map[string]string{"error": friendly(err)}
+			var field fieldError
+			if errors.As(err, &field) {
+				result["field"] = field.Field
+			}
+			_ = json.NewEncoder(w).Encode(result)
 			return
 		}
 		redirect(w, r, dest+"?error="+url.QueryEscape(friendly(err)))
@@ -358,6 +360,9 @@ func (s *Server) action(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = store.New(s.db.Pool).TouchSession(r.Context(), store.TouchSessionParams{Token: row.Token, LastSeen: s.db.Now().UnixMicro()})
 	message := map[string]string{"start": "已开工，正在计时", "pause": "已暂停，暂停期间不计参与时间", "resume": "已继续作业", "report": "本次新增量已保存，任务继续", "finish": "末批已保存，任务已完工", "approve": "本批及关联批次已通过审核", "accounting-version": "整组核算版本已统一，处理原因已留痕"}[action]
+	if action == "dispatch-many" {
+		message = outcome
+	}
 	if message == "" {
 		message = "操作已保存"
 	}
@@ -366,10 +371,25 @@ func (s *Server) action(w http.ResponseWriter, r *http.Request) {
 	if dest == "/review" {
 		anchor = "batch-" + target
 	}
-	location := dest + "?notice=" + url.QueryEscape(message) + "&target=" + url.QueryEscape(target) + "#" + anchor
+	query, _ := url.ParseQuery(r.Form.Get("return_query"))
+	query.Set("notice", message)
+	query.Set("target", target)
+	location := dest + "?" + query.Encode() + "#" + anchor
 	if r.Header.Get("Accept") == "application/json" {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"redirect": location})
+		result := map[string]string{"redirect": location}
+		if dest == "/terminal" && target != "" {
+			state, e := s.db.readTerminal(r.Context(), row, target)
+			if e == nil {
+				p := Page{S: state, Session: row, Path: dest, Now: s.db.Now().UnixMicro(), Filter: url.Values{}, Target: target, Notice: message, ReturnQuery: r.Form.Get("return_query")}
+				tasksFor(&p)
+				var html bytes.Buffer
+				if e = s.templates.ExecuteTemplate(&html, "tasks", p); e == nil {
+					result["html"] = html.String()
+				}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(result)
 		return
 	}
 	redirect(w, r, location)
@@ -386,87 +406,36 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 		redirect(w, r, "/terminal")
 		return
 	}
-	state, err := s.db.Read(r.Context())
+	if r.URL.Path == "/stats" {
+		s.statsPage(w, r)
+		return
+	}
+	var state *State
+	var err error
+	if r.URL.Path == "/terminal" {
+		state, err = s.db.readTerminal(r.Context(), row, r.URL.Query().Get("task"))
+	} else {
+		state, err = s.db.Read(r.Context())
+	}
 	if err != nil {
 		log.Print(err)
 		http.Error(w, "数据库读取失败", 500)
 		return
 	}
-	p := Page{S: state, Session: row, Path: r.URL.Path, Title: map[string]string{"/": "生产概览", "/orders": "生产工单", "/master": "基础资料", "/dispatch": "派工管理", "/review": "报工审核", "/stats": "工时与计件统计", "/audit": "操作审计", "/terminal": "车间公共终端"}[r.URL.Path], Error: r.URL.Query().Get("error"), Notice: r.URL.Query().Get("notice"), Demo: s.demo, Now: s.db.Now().UnixMicro(), Filter: r.URL.Query(), Target: r.URL.Query().Get("target")}
+	p := Page{S: state, Session: row, Path: r.URL.Path, Title: map[string]string{"/": "生产概览", "/orders": "生产工单", "/master": "基础资料", "/dispatch": "派工管理", "/review": "报工审核", "/stats": "工时与计件统计", "/audit": "操作审计", "/terminal": "车间公共终端"}[r.URL.Path], Error: r.URL.Query().Get("error"), Notice: r.URL.Query().Get("notice"), Demo: s.demo, Now: s.db.Now().UnixMicro(), Filter: r.URL.Query(), Target: r.URL.Query().Get("target"), ReturnQuery: r.URL.Query().Encode()}
 	if row.Role == "employee" {
 		p.Title = state.Employee(row.EmployeeID).Name + " · 我的任务"
 	}
-	for _, d := range state.Dispatches {
-		if row.Role == "employee" && !state.IsMember(d.ID, row.EmployeeID) {
-			continue
-		}
-		snap := state.Snapshot(d.SnapshotID)
-		o := state.Order(snap.OrderID)
-		v := state.Standard(&d)
-		task := Task{D: d, Name: v.Name, Order: o.ExternalID, Product: state.Product(o.ProductID).Name, Center: state.Center(o.CenterID).Name, Leader: state.Employee(d.LeaderID).Name, Mine: row.Role != "employee" || row.EmployeeID == d.LeaderID, Price: v.Price, Standard: v.Standard, Parallel: v.Parallel, Collaboration: v.Collaboration}
-		for _, m := range state.Members {
-			if m.DispatchID == d.ID {
-				task.Members = append(task.Members, MemberView{m.EmployeeID, state.Employee(m.EmployeeID).Name, m.Present})
-			}
-		}
-		for _, b := range state.Batches {
-			if b.DispatchID == d.ID {
-				g, bad := state.Counts(&b)
-				task.Reported += g + bad
-				if b.Status == "approved" {
-					task.Approved += g + bad
-				}
-			}
-		}
-		for _, sp := range state.Spans {
-			if sp.DispatchID == d.ID {
-				end := sp.End
-				if end == 0 {
-					end = p.Now
-					task.ActiveMembers++
-				}
-				task.Raw += end - sp.Start
-				if sp.BatchID == nil && end > sp.Start {
-					task.Unreported = true
-				}
-			}
-		}
-		task.Remaining = max(0, d.Quantity-task.Reported)
-		if p.Target == d.ID {
-			task.Feedback = p.Notice
-			task.Error = p.Error
-		}
-		if v := p.Filter.Get("task"); v != "" && d.ID != v {
-			continue
-		}
-		if p.Path == "/terminal" || p.Path == "/dispatch" {
-			if v := p.Filter.Get("status"); v != "" && d.Status != v {
-				continue
-			}
-			if v := p.Filter.Get("employee"); v != "" && !state.IsMember(d.ID, v) {
-				continue
-			}
-			if q := strings.ToLower(p.Filter.Get("q")); q != "" && !strings.Contains(strings.ToLower(task.Order+" "+task.Name+" "+task.Product+" "+task.Leader), q) {
-				continue
-			}
-		}
-		p.Tasks = append(p.Tasks, task)
+	tasksFor(&p)
+	if p.Path == "/dispatch" {
+		p.DispatchOptions = dispatchOptions(state)
 	}
-	priority := map[string]int{"running": 0, "paused": 1, "ready": 2, "finished": 3}
-	sort.Slice(p.Tasks, func(i, j int) bool {
-		a, b := p.Tasks[i].D, p.Tasks[j].D
-		if priority[a.Status] != priority[b.Status] {
-			return priority[a.Status] < priority[b.Status]
-		}
-		if a.At == b.At {
-			return a.ID < b.ID
-		}
-		return a.At > b.At
-	})
 	if p.Path == "/review" {
 		p.Reviews = reviewRows(state, p.Filter, p.Now)
 	}
-	p.Rows = stats(state, row, p.Filter)
+	if p.Path == "/" {
+		p.Rows = stats(state, row, p.Filter)
+	}
 	for _, x := range p.Rows {
 		if x.Status == "approved" {
 			p.Summary.Good += x.Good
@@ -474,20 +443,6 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request) {
 			p.Summary.Raw += x.Raw
 			p.Summary.Accounted += x.Accounted
 			p.Summary.Cents += x.Cents
-		}
-	}
-	if p.Path == "/stats" && p.Filter.Get("month") == "" && p.Filter.Get("all") == "" && p.Filter.Get("from") == "" && p.Filter.Get("to") == "" {
-		p.Filter.Set("month", Date(p.Now)[:7])
-		p.Rows = stats(state, row, p.Filter)
-		p.Summary = Stat{}
-		for _, x := range p.Rows {
-			if x.Status == "approved" {
-				p.Summary.Good += x.Good
-				p.Summary.Bad += x.Bad
-				p.Summary.Raw += x.Raw
-				p.Summary.Accounted += x.Accounted
-				p.Summary.Cents += x.Cents
-			}
 		}
 	}
 	indices := map[string]int{}
@@ -593,6 +548,7 @@ func reviewRows(s *State, f url.Values, now int64) []Review {
 		if v := f.Get("batch"); v != "" && v != b.ID {
 			continue
 		}
+		if v := f.Get("center"); v != "" && s.Order(s.Snapshot(s.Dispatch(b.DispatchID).SnapshotID).OrderID).CenterID != v {continue}
 		if q := strings.ToLower(f.Get("q")); q != "" && !strings.Contains(strings.ToLower(s.TaskLabel(b.DispatchID)+" "+b.ID), q) {
 			continue
 		}
@@ -634,9 +590,9 @@ func reviewRows(s *State, f url.Values, now int64) []Review {
 	return rows
 }
 func (s *Server) export(w http.ResponseWriter, r *http.Request) {
-	state, err := s.db.Read(r.Context())
+	result, err := s.db.readStats(r.Context(), session(r), r.URL.Query(), -1, 0)
 	if err != nil {
-		http.Error(w, "数据库读取失败", 500)
+		http.Error(w, friendly(err), 422)
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
@@ -650,7 +606,7 @@ func (s *Server) export(w http.ResponseWriter, r *http.Request) {
 		}
 		return v
 	}
-	for _, x := range stats(state, session(r), r.URL.Query()) {
+	for _, x := range result.Rows {
 		_ = out.Write([]string{x.Date, safe(x.Employee), safe(x.Center), safe(x.Order), safe(x.Operation), status(x.Status), Quantity(x.Good), Quantity(x.Bad), fmt.Sprintf("%.6f", float64(x.Raw)/60000000), fmt.Sprintf("%.6f", float64(x.Effective)/60000000), fmt.Sprintf("%.6f", float64(x.Accounted)/60000000), Money(x.Cents), safe(x.Reason), x.Algorithm})
 	}
 	out.Flush()
@@ -664,4 +620,75 @@ func (s *Server) render(w http.ResponseWriter, name string, p Page) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(b.Bytes())
+}
+
+func tasksFor(p *Page) {
+	state := p.S
+	for _, d := range state.Dispatches {
+		if p.Session.Role == "employee" && !state.IsMember(d.ID, p.Session.EmployeeID) {
+			continue
+		}
+		snap := state.Snapshot(d.SnapshotID)
+		o := state.Order(snap.OrderID)
+		v := state.Standard(&d)
+		task := Task{D: d, Name: v.Name, Order: o.ExternalID, Product: state.Product(o.ProductID).Name, Center: state.Center(o.CenterID).Name, Leader: state.Employee(d.LeaderID).Name, Mine: p.Session.Role != "employee" || p.Session.EmployeeID == d.LeaderID, Price: v.Price, Standard: v.Standard, Parallel: v.Parallel, Collaboration: v.Collaboration}
+		for _, m := range state.Members {
+			if m.DispatchID == d.ID {
+				task.Members = append(task.Members, MemberView{m.EmployeeID, state.Employee(m.EmployeeID).Name, m.Present})
+			}
+		}
+		for _, b := range state.Batches {
+			if b.DispatchID == d.ID {
+				g, bad := state.Counts(&b)
+				task.Reported += g + bad
+				if b.Status == "approved" {
+					task.Approved += g + bad
+				}
+			}
+		}
+		for _, sp := range state.Spans {
+			if sp.DispatchID == d.ID {
+				end := sp.End
+				if end == 0 {
+					end = p.Now
+					task.ActiveMembers++
+				}
+				task.Raw += end - sp.Start
+				if sp.BatchID == nil && end > sp.Start {
+					task.Unreported = true
+				}
+			}
+		}
+		task.Remaining = max(0, d.Quantity-task.Reported)
+		if p.Target == d.ID {
+			task.Feedback = p.Notice
+			task.Error = p.Error
+		}
+		if v := p.Filter.Get("task"); v != "" && d.ID != v {
+			continue
+		}
+		if p.Path == "/terminal" || p.Path == "/dispatch" {
+			if v := p.Filter.Get("status"); v != "" && d.Status != v {
+				continue
+			}
+			if v := p.Filter.Get("employee"); v != "" && !state.IsMember(d.ID, v) {
+				continue
+			}
+			if q := strings.ToLower(p.Filter.Get("q")); q != "" && !strings.Contains(strings.ToLower(task.Order+" "+task.Name+" "+task.Product+" "+task.Leader), q) {
+				continue
+			}
+		}
+		p.Tasks = append(p.Tasks, task)
+	}
+	priority := map[string]int{"running": 0, "paused": 1, "ready": 2, "finished": 3}
+	sort.Slice(p.Tasks, func(i, j int) bool {
+		a, b := p.Tasks[i].D, p.Tasks[j].D
+		if priority[a.Status] != priority[b.Status] {
+			return priority[a.Status] < priority[b.Status]
+		}
+		if a.At == b.At {
+			return a.ID < b.ID
+		}
+		return a.At > b.At
+	})
 }

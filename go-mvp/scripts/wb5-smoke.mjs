@@ -11,7 +11,13 @@ const check=message=>{checks.push(message);console.log('PASS',message)};
 const context=await browser.newContext({viewport:{width:1440,height:1120},locale:'zh-CN'});
 context.on('page',p=>p.on('pageerror',e=>errors.push(e.message)));
 const page=await context.newPage();
-const submit=async button=>{await Promise.all([button.page().waitForNavigation({waitUntil:'networkidle'}),button.click()]);};
+const submit=async button=>{const p = button.page();
+  const task = await button.evaluate(b=>b.closest('[data-dispatch]')?.dataset.dispatch);
+  if (task) {
+    const nonce = await p.locator(`[data-dispatch="${task}"] [name=request_id]`).first().inputValue();
+    await button.click();
+    await p.waitForFunction(({task,nonce})=>document.querySelector(`[data-dispatch="${task}"] [name=request_id]`)?.value!==nonce,{task,nonce});
+  } else {await Promise.all([p.waitForNavigation({waitUntil:'networkidle'}),button.click()]);}};
 const snap=async(name,p=page)=>{await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:`${out}/${name}.png`,fullPage:false});};
 try {
  await page.goto(base+'/login');await page.locator('details summary').click();await page.locator('input[name=password]').fill('WorkshopDemo!2026');await submit(page.getByRole('button',{name:'进入管理后台'}));
@@ -64,7 +70,7 @@ try {
  await wtask.getByRole('button',{name:'提交本批，继续任务'}).click();
  await worker.waitForTimeout(17000);
  assert.ok(worker.url().includes('/terminal'));assert.equal(await wtask.locator('[name=good]').inputValue(),'10');assert.match(await wtask.textContent(),/正在保存/);
- release();await worker.waitForURL('**/terminal?notice=**');await worker.waitForLoadState('networkidle');check('提交回执延迟17秒时持续触达会话，不会清空输入或退出身份');
+ release();await worker.locator(`[data-dispatch="${a}"] .alert-success`).waitFor();check('提交回执延迟17秒时持续触达会话，不会清空输入或退出身份');
  await worker.unroute('**/action/report');
  await worker.locator(`[data-dispatch="${a}"] [name=good]`).fill('10');await submit(worker.locator(`[data-dispatch="${a}"]`).getByRole('button',{name:'提交最后一批并完工'}));
  await page.goto(base+'/review?q='+name);

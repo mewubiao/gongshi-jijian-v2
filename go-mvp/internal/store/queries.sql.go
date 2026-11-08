@@ -36,6 +36,17 @@ func (q *Queries) GetSession(ctx context.Context, token string) (Session, error)
 	return i, err
 }
 
+const identifyEmployee = `-- name: IdentifyEmployee :one
+SELECT id FROM employees WHERE active AND (card=$1 OR badge=$1) LIMIT 1
+`
+
+func (q *Queries) IdentifyEmployee(ctx context.Context, card string) (string, error) {
+	row := q.db.QueryRow(ctx, identifyEmployee, card)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const loadData = `-- name: LoadData :one
 SELECT jsonb_build_object(
  'centers', (SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id),'[]'::jsonb) FROM centers t),
@@ -59,6 +70,40 @@ SELECT jsonb_build_object(
 
 func (q *Queries) LoadData(ctx context.Context) ([]byte, error) {
 	row := q.db.QueryRow(ctx, loadData)
+	var column_1 []byte
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const loadTerminal = `-- name: LoadTerminal :one
+WITH selected AS MATERIALIZED (
+ SELECT d.id, d.snapshot_id, d.quantity, d.leader_id, d.status, d.at FROM dispatches d
+ WHERE ($1::text='' OR EXISTS (SELECT 1 FROM members m WHERE m.dispatch_id=d.id AND m.employee_id=$1))
+ AND ($2::text='' OR d.id=$2)
+), snaps AS MATERIALIZED (SELECT s.id, s.order_id, s.operation_id, s.version_id, s.plan, s.at FROM snapshots s WHERE s.id IN (SELECT snapshot_id FROM selected)),
+ reports AS MATERIALIZED (SELECT b.id, b.dispatch_id, b.good, b.bad, b.at, b.status, b.reason, b.algorithm FROM batches b WHERE b.dispatch_id IN (SELECT id FROM selected))
+SELECT jsonb_build_object(
+ 'employees',(SELECT coalesce(jsonb_agg(to_jsonb(e)),'[]') FROM employees e WHERE e.active OR e.id IN (SELECT leader_id FROM selected) OR e.id IN (SELECT employee_id FROM members WHERE dispatch_id IN (SELECT id FROM selected))),
+ 'centers',(SELECT coalesce(jsonb_agg(to_jsonb(c)),'[]') FROM centers c),
+ 'products',(SELECT coalesce(jsonb_agg(to_jsonb(p)),'[]') FROM products p WHERE p.id IN (SELECT product_id FROM orders WHERE id IN (SELECT order_id FROM snaps))),
+ 'orders',(SELECT coalesce(jsonb_agg(to_jsonb(o)),'[]') FROM orders o WHERE o.id IN (SELECT order_id FROM snaps)),
+ 'snapshots',(SELECT coalesce(jsonb_agg(to_jsonb(s)),'[]') FROM snaps s),
+ 'versions',(SELECT coalesce(jsonb_agg(to_jsonb(v)),'[]') FROM versions v WHERE v.id IN (SELECT version_id FROM snaps)),
+ 'dispatches',(SELECT coalesce(jsonb_agg(to_jsonb(d)),'[]') FROM selected d),
+ 'members',(SELECT coalesce(jsonb_agg(to_jsonb(m)),'[]') FROM members m WHERE m.dispatch_id IN (SELECT id FROM selected)),
+ 'batches',(SELECT coalesce(jsonb_agg(to_jsonb(b)),'[]') FROM reports b),
+ 'revisions',(SELECT coalesce(jsonb_agg(to_jsonb(r)),'[]') FROM revisions r WHERE r.batch_id IN (SELECT id FROM reports)),
+ 'spans',(SELECT coalesce(jsonb_agg(to_jsonb(s)),'[]') FROM spans s WHERE s.dispatch_id IN (SELECT id FROM selected))
+)::jsonb
+`
+
+type LoadTerminalParams struct {
+	Employee string
+	Task     string
+}
+
+func (q *Queries) LoadTerminal(ctx context.Context, arg LoadTerminalParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, loadTerminal, arg.Employee, arg.Task)
 	var column_1 []byte
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -96,6 +141,61 @@ func (q *Queries) PutSession(ctx context.Context, arg PutSessionParams) error {
 		arg.LastSeen,
 	)
 	return err
+}
+
+const readStats = `-- name: ReadStats :one
+WITH filtered AS MATERIALIZED (
+ SELECT b.at AS "At", a.employee_id AS "EmployeeID", e.name AS "Employee", c.name AS "Center", o.external_id AS "Order", v.name AS "Operation",
+ to_char(to_timestamp(b.at/1000000.0) AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') AS "Date",
+ CASE WHEN b.status='pending' AND NOT a.ready THEN 'unaccounted' ELSE b.status END AS "Status",
+ a.reason AS "Reason", a.good AS "Good", a.bad AS "Bad", a.raw_us AS "Raw", a.effective_us AS "Effective", a.accounted_us AS "Accounted", a.cents AS "Cents", a.ready AS "Ready", b.id AS "BatchID", a.id AS "ID", a.algorithm AS "Algorithm"
+ FROM allocations a JOIN batches b ON b.id=a.batch_id JOIN employees e ON e.id=a.employee_id
+ JOIN dispatches d ON d.id=b.dispatch_id JOIN snapshots s ON s.id=d.snapshot_id JOIN orders o ON o.id=s.order_id
+ JOIN centers c ON c.id=o.center_id JOIN versions v ON v.id=s.version_id
+ WHERE ($1::text='' OR a.employee_id=$1)
+ AND ($2::text='' OR a.employee_id=$2)
+ AND ($3::text='' OR o.center_id=$3)
+ AND ($4::text='' OR o.id=$4)
+ AND ($5::text='' OR s.operation_id=$5)
+ AND b.at>=$6::bigint AND b.at<$7::bigint
+ AND ($8::text='' OR CASE WHEN b.status='pending' AND NOT a.ready THEN 'unaccounted' ELSE b.status END=$8)
+), paged AS (SELECT "At", "EmployeeID", "Employee", "Center", "Order", "Operation", "Date", "Status", "Reason", "Good", "Bad", "Raw", "Effective", "Accounted", "Cents", "Ready", "BatchID", "ID", "Algorithm" FROM filtered ORDER BY "At", "BatchID", "ID" LIMIT $10::bigint OFFSET $9::bigint),
+ totals AS (SELECT coalesce(sum("Good"),0) AS "Good", coalesce(sum("Bad"),0) AS "Bad", coalesce(sum("Raw"),0) AS "Raw", coalesce(sum("Effective"),0) AS "Effective", coalesce(sum("Accounted"),0) AS "Accounted", coalesce(sum("Cents"),0) AS "Cents" FROM filtered WHERE "Status"='approved'),
+ monthly AS (SELECT "EmployeeID", "Employee", sum("Good") AS "Good", sum("Bad") AS "Bad", sum("Accounted") AS "Accounted", sum("Cents") AS "Cents" FROM filtered WHERE "Status"='approved' GROUP BY "EmployeeID", "Employee")
+SELECT jsonb_build_object('Rows',(SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY "At","BatchID","ID"),'[]') FROM paged p),
+ 'Total',(SELECT count(*) FROM filtered), 'Summary',(SELECT to_jsonb(t) FROM totals t),
+ 'Monthly',(SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY "EmployeeID"),'[]') FROM monthly m))::jsonb
+`
+
+type ReadStatsParams struct {
+	Viewer    string
+	Employee  string
+	Center    string
+	OrderID   string
+	Operation string
+	FromUs    int64
+	ToUs      int64
+	Phase     string
+	RowOffset int64
+	RowLimit  int64
+}
+
+func (q *Queries) ReadStats(ctx context.Context, arg ReadStatsParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, readStats,
+		arg.Viewer,
+		arg.Employee,
+		arg.Center,
+		arg.OrderID,
+		arg.Operation,
+		arg.FromUs,
+		arg.ToUs,
+		arg.Phase,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	var column_1 []byte
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const saveAllocations = `-- name: SaveAllocations :exec
@@ -249,6 +349,25 @@ INSERT INTO versions (id, operation_id, price, standard, multiplier, parallel, c
 func (q *Queries) SaveVersions(ctx context.Context, dollar_1 []byte) error {
 	_, err := q.db.Exec(ctx, saveVersions, dollar_1)
 	return err
+}
+
+const statsDirectory = `-- name: StatsDirectory :one
+SELECT jsonb_build_object(
+ 'employees',(SELECT coalesce(jsonb_agg(to_jsonb(e) ORDER BY code),'[]') FROM employees e WHERE $1::text='' OR e.id=$1),
+ 'centers',(SELECT coalesce(jsonb_agg(to_jsonb(c) ORDER BY code),'[]') FROM centers c),
+ 'orders',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY external_id),'[]') FROM orders o),
+ 'operations',(SELECT coalesce(jsonb_agg(to_jsonb(o) ORDER BY product_id,seq),'[]') FROM operations o),
+ 'dispatches',(SELECT coalesce(jsonb_agg(to_jsonb(d)),'[]') FROM dispatches d WHERE d.leader_id=$1 AND EXISTS (SELECT 1 FROM batches b WHERE b.dispatch_id=d.id AND b.status='rejected')),
+ 'batches',(SELECT coalesce(jsonb_agg(to_jsonb(b)),'[]') FROM batches b JOIN dispatches d ON d.id=b.dispatch_id WHERE d.leader_id=$1 AND b.status='rejected'),
+ 'revisions',(SELECT coalesce(jsonb_agg(to_jsonb(r)),'[]') FROM revisions r JOIN batches b ON b.id=r.batch_id JOIN dispatches d ON d.id=b.dispatch_id WHERE d.leader_id=$1 AND b.status='rejected')
+)::jsonb
+`
+
+func (q *Queries) StatsDirectory(ctx context.Context, viewer string) ([]byte, error) {
+	row := q.db.QueryRow(ctx, statsDirectory, viewer)
+	var column_1 []byte
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const touchSession = `-- name: TouchSession :exec

@@ -17,7 +17,13 @@ const checks = [];
 const check = (message) => { checks.push(message); console.log('PASS', message); };
 const snap = async (page, name) => page.screenshot({path:`${out}/${name}.png`,fullPage:true});
 const submit = async (page, button) => {
-  await Promise.all([page.waitForNavigation({waitUntil:'networkidle'}),button.click()]);
+  const p = button.page();
+  const task = await button.evaluate(b=>b.closest('[data-dispatch]')?.dataset.dispatch);
+  if (task) {
+    const nonce = await p.locator(`[data-dispatch="${task}"] [name=request_id]`).first().inputValue();
+    await button.click();
+    await p.waitForFunction(({task,nonce})=>document.querySelector(`[data-dispatch="${task}"] [name=request_id]`)?.value!==nonce,{task,nonce});
+  } else {await Promise.all([p.waitForNavigation({waitUntil:'networkidle'}),button.click()]);}
   assert.equal(await page.locator('.alert-error[role=alert]').count(),0,await page.locator('.alert-error[role=alert]').allTextContents());
 };
 try {
@@ -39,7 +45,7 @@ try {
   await submit(admin,admin.getByRole('button',{name:'校验并导入'}));
   assert.equal(await admin.locator('tr').filter({hasText:externalId}).count(),1);
   await snap(admin,'03-orders');check('真实 CSV 文件导入和按外部标识幂等更新');
-  await admin.goto(`${base}/dispatch`);
+  await admin.goto(`${base}/dispatch`); await admin.getByText('单人派工 / 多人协作一单',{exact:true}).first().click();
   await admin.locator('#dispatch-order').selectOption({label:`${externalId} · 100.0000 产品单位`});
   const orderId=await admin.locator('#dispatch-order').inputValue();
   await admin.locator('#dispatch-operation').selectOption({label:'10 · 精密切削'});

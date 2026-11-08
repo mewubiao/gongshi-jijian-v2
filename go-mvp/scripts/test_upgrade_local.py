@@ -1,5 +1,7 @@
 """Rollback must not lose reports accepted just before application shutdown."""
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -24,6 +26,29 @@ class RollbackProtection(unittest.TestCase):
         root_patch = patch.object(upgrade, 'ROOT', root)
         root_patch.start()
         self.addCleanup(root_patch.stop)
+        binary_patch = patch.object(upgrade, 'BINARY', root / 'workshop')
+        binary_patch.start()
+        self.addCleanup(binary_patch.stop)
+        upgrade.BINARY.write_bytes(b'current executable fixture')
+
+    def test_compatible_previous_app_can_keep_v2_reports_during_rollback(self):
+        metadata = {'version':'WB5-interval-v2-r1', 'binary_sha256':hashlib.sha256((self.backup / 'workshop.previous').read_bytes()).hexdigest()}
+        (self.backup / 'version.previous.json').write_text(json.dumps(metadata))
+        with patch.object(upgrade, 'snapshot', return_value={'batches':[{'algorithm':'interval-v2'}]}), \
+                patch.object(upgrade, 'stop_app') as stop, \
+                patch.object(upgrade, 'start_app', return_value='WB5-interval-v2-r1'), \
+                patch.object(upgrade, 'atomic_binary') as replace:
+            self.assertEqual(upgrade.restore(self.backup),'WB5-interval-v2-r1')
+            stop.assert_called_once()
+            replace.assert_called_once()
+
+    def test_mismatched_previous_binary_cannot_claim_v2_compatibility(self):
+        (self.backup / 'version.previous.json').write_text(json.dumps({'version':'WB5-interval-v2-r1','binary_sha256':'incorrect'}))
+        with patch.object(upgrade, 'snapshot', return_value={'batches':[{'algorithm':'interval-v2'}]}), \
+                patch.object(upgrade, 'stop_app') as stop:
+            with self.assertRaisesRegex(RuntimeError, 'v2 reports'):
+                upgrade.restore(self.backup)
+            stop.assert_not_called()
 
     def test_report_committed_between_precheck_and_shutdown_keeps_current_app(self):
         with patch.object(upgrade, 'snapshot', side_effect=[{'batches': []}, {'batches': [{'algorithm': 'interval-v2'}]}]), \

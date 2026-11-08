@@ -18,7 +18,7 @@ import sys
 import time
 import urllib.request
 
-ROOT = Path.home() / '.local/share/gongshi-jijian-go-mvp'
+ROOT = Path(os.environ.get('WORKSHOP_LOCAL_ROOT', Path.home() / '.local/share/gongshi-jijian-go-mvp'))
 SOURCE = Path(__file__).resolve().parents[1]
 LABEL = 'com.multica.gongshi-jijian-go-mvp.app'
 DOMAIN = f'gui/{os.getuid()}'
@@ -94,15 +94,22 @@ def restore(backup):
     previous_binary = backup / 'workshop.previous'
     if not previous_binary.is_file():
         raise FileNotFoundError('Previous executable is missing; current service was not stopped')
+    compatible = False
+    previous_version = backup / 'version.previous.json'
+    if previous_version.is_file():
+        metadata = json.loads(previous_version.read_text(encoding='utf-8'))
+        version = metadata.get('version', '')
+        compatible = metadata.get('binary_sha256') == hashlib.sha256(previous_binary.read_bytes()).hexdigest() and (
+            version.startswith('WB5-interval-v2') or 'interval-v2' in metadata.get('accounting_algorithms', []))
     # A legacy binary cannot understand new v2 business facts. Never restore a
     # stale database dump over work recorded since the upgrade.
-    if any(b.get('algorithm') == 'interval-v2' for b in snapshot()['batches']):
+    if not compatible and any(b.get('algorithm') == 'interval-v2' for b in snapshot()['batches']):
         raise RuntimeError('v2 reports exist: keep the current service and repair forward; legacy rollback would corrupt accounting')
     stop_app()
     try:
         # Requests accepted between the first check and graceful shutdown can
         # still commit. Check again with the app stopped before replacing it.
-        if any(b.get('algorithm') == 'interval-v2' for b in snapshot()['batches']):
+        if not compatible and any(b.get('algorithm') == 'interval-v2' for b in snapshot()['batches']):
             raise RuntimeError('v2 reports arrived before shutdown; legacy rollback refused')
     except Exception:
         start_app()  # The current binary and source have not been touched.
@@ -113,17 +120,20 @@ def restore(backup):
         (ROOT / 'source').rename(backup / ('source.replaced-' + str(time.time_ns())))
         previous.rename(ROOT / 'source')
     version = start_app()
-    write_json(ROOT / 'run/version.json', {'version':version, 'rolled_back_from':str(backup), 'at':datetime.datetime.now().isoformat()})
+    write_json(ROOT / 'run/version.json', {'version':version, 'binary_sha256':hashlib.sha256(BINARY.read_bytes()).hexdigest(), 'accounting_algorithms':['interval-v1','interval-v2'] if compatible else ['interval-v1'], 'rolled_back_from':str(backup), 'at':datetime.datetime.now().isoformat()})
     return version
 
 
 def upgrade(candidate):
     if not candidate.is_file() or candidate.resolve() == BINARY.resolve():
         raise RuntimeError('Supply a separate, verified candidate binary')
-    backup = ROOT / 'backups' / ('wb5-upgrade-' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
+    backup = ROOT / 'backups' / ('upgrade-' + datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
     backup.mkdir(parents=True, mode=0o700)
     shutil.copy2(BINARY, backup / 'workshop.previous')
     (backup / 'workshop.previous').chmod(0o700)
+    version_file = ROOT / 'run/version.json'
+    if version_file.is_file():
+        shutil.copy2(version_file, backup / 'version.previous.json')
     shutil.copy2(PLIST, backup / 'app.plist')
     (backup / 'app.plist').chmod(0o600)
     staged = ROOT / ('source.next-' + str(time.time_ns()))
@@ -162,7 +172,7 @@ def upgrade(candidate):
         old_allocs = [a for a in before['allocations'] if a['batch_id'] in approved]
         if old_allocs != [a for a in current['allocations'] if a['batch_id'] in approved]:
             raise RuntimeError('Approved allocations changed after startup')
-        manifest = {'version':version, 'binary_sha256':hashlib.sha256(BINARY.read_bytes()).hexdigest(), 'backup':str(backup), 'url':'http://127.0.0.1:8080', 'at':datetime.datetime.now().isoformat(), 'migration_business_data_unchanged':True, 'approved_allocations_unchanged':True, 'counts':{t:len(rows) for t, rows in current.items()}}
+        manifest = {'version':version, 'accounting_algorithms':['interval-v1','interval-v2'], 'binary_sha256':hashlib.sha256(BINARY.read_bytes()).hexdigest(), 'backup':str(backup), 'url':'http://127.0.0.1:8080', 'at':datetime.datetime.now().isoformat(), 'migration_business_data_unchanged':True, 'approved_allocations_unchanged':True, 'counts':{t:len(rows) for t, rows in current.items()}}
         write_json(ROOT / 'run/version.json', manifest)
         write_json(backup / 'upgrade-result.json', manifest)
         print(json.dumps({'version':version,'backup':backup.name,'url':manifest['url'],'migration_business_data_unchanged':True,'approved_allocations_unchanged':True},ensure_ascii=False,indent=2))
